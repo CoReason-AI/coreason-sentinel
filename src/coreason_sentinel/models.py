@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal
 
@@ -12,7 +12,9 @@ class Trigger(BaseModel):
 
     metric_name: str = Field(..., description="The name of the metric to monitor (e.g., 'error_rate').")
     threshold: float = Field(..., description="The value threshold that triggers the breaker.")
-    window_seconds: int = Field(..., description="The time window in seconds to evaluate the metric.")
+    window_seconds: int = Field(
+        ..., gt=0, description="The time window in seconds to evaluate the metric. Must be positive."
+    )
     operator: Literal[">", "<"] = Field(
         ">", description="Comparison operator. Default is '>' (greater than threshold)."
     )
@@ -24,8 +26,10 @@ class SentinelConfig(BaseModel):
     """
 
     agent_id: str = Field(..., description="Unique identifier for the agent being monitored.")
-    sample_rate: float = Field(0.01, description="Fraction of traffic to sample (0.0 to 1.0). Default 1%.")
-    drift_threshold_kl: float = Field(0.5, description="KL Divergence threshold for output drift detection.")
+    sample_rate: float = Field(
+        0.01, ge=0.0, le=1.0, description="Fraction of traffic to sample (0.0 to 1.0). Default 1%."
+    )
+    drift_threshold_kl: float = Field(0.5, ge=0.0, description="KL Divergence threshold for output drift detection.")
     circuit_breaker_triggers: List[Trigger] = Field(
         default_factory=list, description="List of triggers that can trip the circuit breaker."
     )
@@ -47,7 +51,9 @@ class Alert(BaseModel):
 
     message: str = Field(..., description="Human-readable alert message.")
     severity: AlertSeverity = Field(..., description="Severity level of the alert.")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Time when the alert was generated.")
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Time when the alert was generated."
+    )
 
 
 class AgentStatus(str, Enum):
