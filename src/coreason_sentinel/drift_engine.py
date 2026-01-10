@@ -78,6 +78,9 @@ class DriftEngine:
         if p.shape != q.shape:
             raise ValueError(f"Distributions must have same dimension. Got {p.shape} and {q.shape}")
 
+        if np.any(p < 0) or np.any(q < 0):
+            raise ValueError("Probabilities cannot be negative")
+
         # Add epsilon to avoid zero probabilities and re-normalize
         p = p + epsilon
         q = q + epsilon
@@ -107,8 +110,16 @@ class DriftEngine:
         if not baseline_batch or not live_batch:
             raise ValueError("Batches cannot be empty")
 
-        baseline_arr = np.array(baseline_batch)
-        live_arr = np.array(live_batch)
+        try:
+            baseline_arr = np.array(baseline_batch, dtype=np.float64)
+            live_arr = np.array(live_batch, dtype=np.float64)
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"Failed to create array from batches: {e}. Ensure all vectors have consistent dimensions."
+            ) from e
+
+        if baseline_arr.ndim != 2 or live_arr.ndim != 2:
+            raise ValueError("Input batches must be 2D arrays (List of Lists).")
 
         # Calculate Centroids
         baseline_centroid = np.mean(baseline_arr, axis=0)

@@ -172,3 +172,28 @@ class TestDriftEngine:
         # Cosine of NaN usually results in NaN
         sim = DriftEngine.compute_cosine_similarity(v1, v2)
         assert np.isnan(sim)
+
+    def test_detect_vector_drift_ragged_batch(self) -> None:
+        """Test that ragged batches (inconsistent vector lengths) raise ValueError."""
+        # Baseline is ragged
+        baseline = [[1.0, 0.0], [1.0]]
+        live = [[1.0, 0.0]]
+        with pytest.raises(ValueError, match="Failed to create array"):
+            DriftEngine.detect_vector_drift(baseline, live)
+
+    def test_detect_vector_drift_invalid_structure(self) -> None:
+        """Test that passing a flat list instead of list of lists raises ValueError."""
+        # User passes single vector as batch by mistake
+        baseline = [1.0, 0.0, 1.0]  # This is a 1D list, not List[List]
+        live = [[1.0, 0.0, 1.0]]
+        # The type hint says List[List[float]], but at runtime python allows anything.
+        # np.array(baseline) will be 1D.
+        with pytest.raises(ValueError, match="Input batches must be 2D arrays"):
+            DriftEngine.detect_vector_drift(baseline, live)  # type: ignore
+
+    def test_kl_divergence_negative_inputs(self) -> None:
+        """Test that negative probabilities raise ValueError."""
+        p = [-0.1, 1.1]
+        q = [0.5, 0.5]
+        with pytest.raises(ValueError, match="Probabilities cannot be negative"):
+            DriftEngine.compute_kl_divergence(p, q)
