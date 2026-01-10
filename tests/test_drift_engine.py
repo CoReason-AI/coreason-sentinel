@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from coreason_sentinel.drift_engine import DriftEngine
@@ -103,3 +104,71 @@ class TestDriftEngine:
             DriftEngine.detect_vector_drift([], [[1.0]])
         with pytest.raises(ValueError, match="Batches cannot be empty"):
             DriftEngine.detect_vector_drift([[1.0]], [])
+
+    # --- Edge Cases & Complex Scenarios ---
+
+    def test_detect_vector_drift_different_batch_sizes(self) -> None:
+        """Test comparing a large baseline to a small live batch."""
+        # Baseline: 100 vectors clustering around [1.0, 0.0]
+        # Live: 10 vectors clustering around [1.0, 0.0]
+        # Should have near zero drift.
+        baseline = [[1.0, 0.0]] * 100
+        live = [[1.0, 0.0]] * 10
+        drift = DriftEngine.detect_vector_drift(baseline, live)
+        assert drift == pytest.approx(0.0)
+
+        # Baseline: 100 vectors at [1,0], Live 10 vectors at [0,1]
+        baseline = [[1.0, 0.0]] * 100
+        live = [[0.0, 1.0]] * 10
+        drift = DriftEngine.detect_vector_drift(baseline, live)
+        assert drift == pytest.approx(1.0)
+
+    def test_detect_vector_drift_high_dimensionality(self) -> None:
+        """Test with high-dimensional vectors (e.g., 1536 for embeddings)."""
+        dim = 1536
+        # Generate random vectors
+        np.random.seed(42)
+        v1 = np.random.rand(dim).tolist()
+        v2 = np.random.rand(dim).tolist()  # Likely orthogonalish, but let's just check it runs
+
+        # Exact duplicate batch
+        baseline = [v1]
+        live = [v1]
+        drift = DriftEngine.detect_vector_drift(baseline, live)
+        assert drift == pytest.approx(0.0)
+
+        # Different vectors
+        baseline = [v1]
+        live = [v2]
+        drift = DriftEngine.detect_vector_drift(baseline, live)
+        # Should be a float between 0 and 2
+        assert 0.0 <= drift <= 2.0
+
+    def test_cosine_similarity_magnitude_independence(self) -> None:
+        """Test that scaling a vector does not change its cosine similarity."""
+        v1 = [1.0, 2.0, 3.0]
+        v2 = [100.0, 200.0, 300.0]  # Same direction, scaled
+        sim = DriftEngine.compute_cosine_similarity(v1, v2)
+        assert sim == pytest.approx(1.0)
+
+        v3 = [-1.0, -2.0, -3.0]  # Opposite direction
+        sim = DriftEngine.compute_cosine_similarity(v1, v3)
+        assert sim == pytest.approx(-1.0)
+
+    def test_kl_divergence_extreme_values(self) -> None:
+        """Test KL Divergence with extremely small probabilities."""
+        p = [1e-20, 1.0]
+        q = [1.0, 1e-20]
+        # Should not raise math error and return a high divergence
+        kl = DriftEngine.compute_kl_divergence(p, q)
+        assert kl > 10.0  # Expect large divergence
+
+    def test_nan_inputs(self) -> None:
+        """Test behavior with NaN inputs. Should likely propagate NaN or raise error."""
+        # Current implementation relies on scipy/numpy.
+        # Generally, it's safer if it raises an error or returns NaN, but we should know which.
+        v1 = [np.nan, 1.0]
+        v2 = [1.0, 1.0]
+        # Cosine of NaN usually results in NaN
+        sim = DriftEngine.compute_cosine_similarity(v1, v2)
+        assert np.isnan(sim)
