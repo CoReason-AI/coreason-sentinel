@@ -11,11 +11,11 @@
 import unittest
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Union
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
-from coreason_sentinel.interfaces import GradeResult, VeritasEvent
+from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasEvent
 from coreason_sentinel.models import SentinelConfig, Trigger
 from coreason_sentinel.spot_checker import SpotChecker
 
@@ -25,7 +25,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         self.config = SentinelConfig(agent_id="test-agent", sample_rate=1.0, circuit_breaker_triggers=[])
         self.mock_cb = MagicMock(spec=CircuitBreaker)
         self.mock_sc = MagicMock(spec=SpotChecker)
-        self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc)
+        self.mock_bp = MagicMock(spec=BaselineProviderProtocol)
+        self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp)
 
         self.event = VeritasEvent(
             event_id="evt-1",
@@ -78,6 +79,51 @@ class TestTelemetryIngestor(unittest.TestCase):
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("faithfulness_score", calls)
 
+    @patch("coreason_sentinel.ingestor.DriftEngine.detect_vector_drift")
+    def test_drift_detection(self, mock_detect_drift: MagicMock) -> None:
+        """Test drift detection flow when embedding is present."""
+        self.mock_sc.should_sample.return_value = False  # Ensure no sampling triggers
+
+        embedding = [0.1, 0.2, 0.3]
+        baseline = [[0.1, 0.2, 0.3]]
+        self.event.metadata["embedding"] = embedding
+        self.mock_bp.get_baseline_vectors.return_value = baseline
+        mock_detect_drift.return_value = 0.5
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_bp.get_baseline_vectors.assert_called_with("test-agent")
+        mock_detect_drift.assert_called_with(baseline, [embedding])
+        self.mock_cb.record_metric.assert_any_call("vector_drift", 0.5)
+        self.assertEqual(self.mock_cb.check_triggers.call_count, 2)  # once metrics, once drift
+
+    def test_drift_detection_exception(self) -> None:
+        """Test error handling in drift detection."""
+        self.mock_sc.should_sample.return_value = False
+        self.event.metadata["embedding"] = [0.1]
+        # Simulate exception
+        self.mock_bp.get_baseline_vectors.side_effect = Exception("DB Error")
+
+        # Should not raise exception
+        self.ingestor.process_event(self.event)
+        # And should log error (implicitly covered by execution flow)
+
+    def test_drift_detection_no_embedding(self) -> None:
+        """Test drift detection skipped when no embedding."""
+        self.event.metadata = {}  # No embedding
+        self.ingestor.process_event(self.event)
+        self.mock_bp.get_baseline_vectors.assert_not_called()
+
+    def test_drift_detection_no_baseline(self) -> None:
+        """Test drift detection skipped when no baseline."""
+        self.event.metadata["embedding"] = [0.1]
+        self.mock_bp.get_baseline_vectors.return_value = []
+        self.ingestor.process_event(self.event)
+        # drift detection not called
+        # checking record_metric not called with vector_drift
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("vector_drift", calls)
+
     def test_hallucination_storm_scenario(self) -> None:
         """
         Story B: The 'Hallucination Storm'.
@@ -100,9 +146,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         from coreason_sentinel.interfaces import AssayGraderProtocol
 
         mock_grader = MagicMock(spec=AssayGraderProtocol)
+        mock_bp = MagicMock(spec=BaselineProviderProtocol)
         real_sc = SpotChecker(config, mock_grader)
 
-        ingestor = TelemetryIngestor(config, real_cb, real_sc)
+        ingestor = TelemetryIngestor(config, real_cb, real_sc, mock_bp)
 
         # 2. Simulate "Bad" Traffic (Mock Redis Storage)
 
