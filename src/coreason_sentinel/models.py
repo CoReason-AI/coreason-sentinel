@@ -45,6 +45,10 @@ class SentinelConfig(BaseModel):
     notification_channels: List[str] = Field(
         default_factory=list, description="List of email addresses or channels for notifications."
     )
+    sentiment_regex_patterns: List[str] = Field(
+        default_factory=lambda: ["STOP", "WRONG", "Bad bot"],
+        description="List of regex patterns to detect negative sentiment in user input.",
+    )
 
 
 class AlertSeverity(str, Enum):

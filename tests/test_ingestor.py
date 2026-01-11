@@ -356,3 +356,43 @@ class TestTelemetryIngestor(unittest.TestCase):
             mock_method.assert_called_once()
             # Verify logger error was called
             mock_logger.error.assert_called_with("Failed to process output drift detection: Boom")
+
+    def test_extract_refusal_metric(self) -> None:
+        """Test that refusal flag in metadata records a metric."""
+        self.event.metadata["is_refusal"] = True
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("refusal_count", 1.0)
+
+    def test_extract_sentiment_metric(self) -> None:
+        """Test that configured regex patterns trigger sentiment metric."""
+        # Default config has "STOP"
+        self.event.input_text = "Please STOP this now."
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_sentiment_metric_custom_config(self) -> None:
+        """Test that custom regex patterns work."""
+        self.config.sentiment_regex_patterns = ["^HATE"]
+        self.event.input_text = "HATE this result"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_sentiment_no_match(self) -> None:
+        """Test that no metric is recorded if no match."""
+        self.event.input_text = "I love this result"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        # Ensure sentiment metric was NOT recorded
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("sentiment_frustration_count", calls)
