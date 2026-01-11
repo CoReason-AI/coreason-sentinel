@@ -124,6 +124,106 @@ class TestTelemetryIngestor(unittest.TestCase):
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("vector_drift", calls)
 
+    def test_drift_dimension_mismatch(self) -> None:
+        """
+        Test behavior when embedding dimension mismatches baseline.
+        DriftEngine would raise ValueError, which should be caught.
+        """
+        self.mock_sc.should_sample.return_value = False
+        embedding = [0.1, 0.2]  # 2D
+        baseline = [[0.1, 0.2, 0.3]]  # 3D
+        self.event.metadata["embedding"] = embedding
+        self.mock_bp.get_baseline_vectors.return_value = baseline
+
+        # Use the REAL DriftEngine (not patched) to verify it raises ValueError and we catch it.
+        # But we need to ensure the DriftEngine is importable and works.
+        # Since we patched it in other tests, here we rely on the implementation in src.
+        # However, the class `DriftEngine` is used in `ingestor.py`.
+        # To test the `try...except` block in `ingestor.py` specifically catching ValueError from DriftEngine:
+
+        # We can just let the real DriftEngine run.
+        self.ingestor.process_event(self.event)
+
+        # Should not raise.
+        # Should NOT have recorded vector_drift.
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("vector_drift", calls)
+
+    def test_drift_storm_scenario(self) -> None:
+        """
+        Complex Scenario: 'Drift Storm'.
+        High vector drift causes Circuit Breaker to trip.
+        Validates full flow: Event -> Embedding -> Drift Calc -> Metric -> Trigger.
+        """
+        from redis import Redis
+
+        mock_redis = MagicMock(spec=Redis)
+
+        # Trigger: Vector Drift > 0.5 (AVG) in 60s
+        trigger = Trigger(
+            metric_name="vector_drift", threshold=0.5, window_seconds=60, operator=">", aggregation_method="AVG"
+        )
+        config = SentinelConfig(agent_id="drift-bot", sample_rate=0.0, circuit_breaker_triggers=[trigger])
+
+        real_cb = CircuitBreaker(mock_redis, config)
+        mock_sc = MagicMock(spec=SpotChecker)
+        mock_sc.should_sample.return_value = False
+        mock_bp = MagicMock(spec=BaselineProviderProtocol)
+
+        # Baseline: Unit vector on X axis
+        mock_bp.get_baseline_vectors.return_value = [[1.0, 0.0]]
+
+        ingestor = TelemetryIngestor(config, real_cb, mock_sc, mock_bp)
+
+        # Setup Mock Redis
+        redis_store: Dict[str, List[Tuple[float, bytes]]] = {}
+
+        def mock_zadd(key: str, mapping: Dict[Union[str, bytes], float]) -> None:
+            if key not in redis_store:
+                redis_store[key] = []
+            for m, s in mapping.items():
+                redis_store[key].append((s, m if isinstance(m, bytes) else m.encode("utf-8")))
+
+        def mock_zrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> List[bytes]:
+            if key not in redis_store:
+                return []
+            return [m for s, m in redis_store[key]]
+
+        def mock_zremrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> None:
+            pass
+
+        def mock_get(key: str) -> bytes:
+            return b"CLOSED"
+
+        mock_redis.zadd.side_effect = mock_zadd
+        mock_redis.zrangebyscore.side_effect = mock_zrange
+        mock_redis.zremrangebyscore.side_effect = mock_zremrange
+        mock_redis.get.side_effect = mock_get
+
+        # Feed events with Orthogonal embeddings (Unit vector on Y axis)
+        # Cosine Similarity (1,0) . (0,1) = 0.
+        # Drift = 1 - 0 = 1.0.
+        event = VeritasEvent(
+            event_id="evt-drift",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="drift-bot",
+            session_id="sess-1",
+            input_text="foo",
+            output_text="bar",
+            metrics={},
+            metadata={"embedding": [0.0, 1.0]},
+        )
+
+        for _ in range(3):
+            ingestor.process_event(event)
+
+        # Drift scores recorded: 1.0, 1.0, 1.0
+        # Avg: 1.0.
+        # Threshold: 0.5.
+        # 1.0 > 0.5 -> Trip.
+
+        mock_redis.set.assert_called_with("sentinel:breaker:drift-bot:state", "OPEN")
+
     def test_hallucination_storm_scenario(self) -> None:
         """
         Story B: The 'Hallucination Storm'.
