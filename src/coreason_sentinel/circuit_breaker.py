@@ -8,6 +8,8 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
+from __future__ import annotations
+
 import math
 import time
 import uuid

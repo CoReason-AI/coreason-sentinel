@@ -301,3 +301,195 @@ class TestOutputDriftDetection:
                 break
 
         assert length_call_found
+    def test_gradual_drift_scenario(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
+        """
+        Complex Scenario: Gradual Drift.
+        Simulate a sequence of events where output length shifts from matching baseline to deviating.
+        Verifies that KL divergence increases and eventually trips the breaker.
+        Uses a functional Redis mock.
+        """
+        # 1. Setup Logic with Functional Mocks
+        from typing import Dict, List, Tuple, Union
+
+        mock_redis = MagicMock()
+        redis_store: Dict[str, List[Tuple[float, bytes]]] = {}
+
+        def mock_zadd(key: str, mapping: Dict[Union[str, bytes], float]) -> None:
+            if key not in redis_store:
+                redis_store[key] = []
+            for m, s in mapping.items():
+                redis_store[key].append((s, m if isinstance(m, bytes) else m.encode("utf-8")))
+
+        def mock_zrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> List[bytes]:
+             # Return list of members for THIS key
+            if key not in redis_store:
+                return []
+            # Sort by score just in case, though zadd appends
+            sorted_items = sorted(redis_store[key], key=lambda x: x[0])
+            return [m for s, m in sorted_items]
+
+        def mock_zrevrange(key: str, start: int, end: int) -> List[bytes]:
+            if key not in redis_store:
+                return []
+            sorted_items = sorted(redis_store[key], key=lambda x: x[0], reverse=True)
+            # Simulate slice (end is inclusive in redis-py for zrange but start/end are ranks here)
+            # zrevrange(0, N) gets N+1 items if inclusive? Redis docs say stop is inclusive.
+            # But python slice is exclusive.
+            # Usually redis-py zrevrange(0, 99) gets 100 items.
+            # Let's assume input 'limit' logic in CircuitBreaker uses zrevrange(0, limit - 1).
+            # So we return up to limit items.
+            # Logic: events = self.redis.zrevrange(key, 0, limit - 1)
+            # If limit is 10, args are 0, 9. We want indices 0..9 inclusive.
+            # Python slice [0:10] is correct.
+            # start=0, end=9. slice is [0 : 9+1].
+            return [m for s, m in sorted_items[start : end + 1]]
+
+        def mock_zremrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> None:
+            pass
+
+        def mock_get(key: str) -> bytes:
+            return b"CLOSED"
+
+        mock_redis.zadd.side_effect = mock_zadd
+        mock_redis.zrangebyscore.side_effect = mock_zrange
+        mock_redis.zrevrange.side_effect = mock_zrevrange
+        mock_redis.zremrangebyscore.side_effect = mock_zremrange
+        mock_redis.get.side_effect = mock_get
+
+        # Update config to have a small window for faster drift
+        config.drift_sample_window = 5
+        # Trigger: output_drift_kl > 0.5
+
+        real_cb = CircuitBreaker(mock_redis, config)
+        spot_checker = Mock()
+        spot_checker.should_sample.return_value = False
+
+        # Baseline: [0.0, 1.0, 0.0] for bins [0, 10, 20, 30]
+        # This matches "Good" samples (15.0) perfectly, so KL should be ~0.
+        baseline_provider.get_baseline_output_length_distribution.return_value = (
+            [0.0, 1.0, 0.0],
+            [0.0, 10.0, 20.0, 30.0],
+        )
+
+        ingestor = TelemetryIngestor(config, real_cb, spot_checker, baseline_provider)
+
+        # 2. Feed "Good" Events (Length 15)
+        # Should match baseline, low drift.
+        good_event = VeritasEvent(
+            event_id="good",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="test-agent",
+            session_id="s1",
+            input_text="hi",
+            output_text="word",
+            metrics={"token_count": 15},
+            metadata={}
+        )
+
+        for _ in range(5):
+            ingestor.process_event(good_event)
+
+        # Verify NO trip
+        mock_redis.set.assert_not_called()
+
+        # 3. Feed "Bad" Events (Length 25)
+        # Drift should increase.
+        # Window is 5. As we add bad events, they replace good ones in the calculation window.
+        bad_event = VeritasEvent(
+            event_id="bad",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="test-agent",
+            session_id="s1",
+            input_text="hi",
+            output_text="word",
+            metrics={"token_count": 25},
+            metadata={}
+        )
+
+        # 1st bad event: Window [25, 15, 15, 15, 15] -> Some drift
+        # ...
+        # 5th bad event: Window [25, 25, 25, 25, 25] -> High drift (All in Bin 2, Baseline expects 10% there)
+
+        for _ in range(5):
+            ingestor.process_event(bad_event)
+
+        # Verify TRIP
+        mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+
+    def test_sparse_data_distribution(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
+        """
+        Edge Case: Sparse Data.
+        Verify KL calculation works with only 1 recent sample.
+        """
+        mock_redis = MagicMock()
+        # Return only 1 sample [15.0] (Perfect match to baseline center)
+        mock_redis.zrevrange.return_value = [b"123:15.0:uuid"]
+
+        real_cb = CircuitBreaker(mock_redis, config)
+        ingestor = TelemetryIngestor(config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider)
+
+        event = VeritasEvent(
+            event_id="e1",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="test-agent",
+            session_id="s1",
+            input_text="hi",
+            output_text="word",
+            metrics={"token_count": 15},
+            metadata={}
+        )
+
+        ingestor.process_event(event)
+
+        # Check drift recorded. Should be low but not failing.
+        drift_call_found = False
+        for call in mock_redis.zadd.call_args_list:
+            args, _ = call
+            key = args[0]
+            if "output_drift_kl" in key:
+                drift_call_found = True
+                break
+        assert drift_call_found
+
+    def test_samples_completely_outside_bins(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
+        """
+        Edge Case: Samples far outside baseline bins.
+        """
+        mock_redis = MagicMock()
+        # Sample 1000.0 (Far outside bins 0-30)
+        mock_redis.zrevrange.return_value = [b"123:1000.0:uuid"]
+
+        real_cb = CircuitBreaker(mock_redis, config)
+        ingestor = TelemetryIngestor(config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider)
+
+        event = VeritasEvent(
+            event_id="e1",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="test-agent",
+            session_id="s1",
+            input_text="hi",
+            output_text="word",
+            metrics={"token_count": 1000},
+            metadata={}
+        )
+
+        ingestor.process_event(event)
+
+        # Check drift recorded.
+        # Distribution will be [0, 0, 0].
+        # KL(Baseline || Live)
+        # Baseline [0.1, 0.8, 0.1]. Live [e, e, e].
+        # Should be high.
+
+        drift_val = 0.0
+        for call in mock_redis.zadd.call_args_list:
+            args, _ = call
+            key = args[0]
+            if "output_drift_kl" in key:
+                payload = args[1]
+                member = list(payload.keys())[0]
+                drift_val = float(member.split(":")[1])
+                break
+
+        # With zero matching bins, drift should be substantial
+        assert drift_val > 0.1
