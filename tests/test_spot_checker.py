@@ -1,0 +1,51 @@
+# Copyright (c) 2025 CoReason, Inc.
+#
+# This software is proprietary and dual-licensed.
+# Licensed under the Prosperity Public License 3.0 (the "License").
+# A copy of the license is available at https://prosperitylicense.com/versions/3.0.0
+# For details, see the LICENSE file.
+# Commercial use beyond a 30-day trial requires a separate license.
+#
+# Source Code: https://github.com/CoReason-AI/coreason_sentinel
+
+import unittest
+from unittest.mock import MagicMock
+
+from coreason_sentinel.interfaces import AssayGraderProtocol, GradeResult
+from coreason_sentinel.models import SentinelConfig
+from coreason_sentinel.spot_checker import SpotChecker
+
+
+class TestSpotChecker(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = SentinelConfig(agent_id="test-agent", sample_rate=0.1, circuit_breaker_triggers=[])
+        self.mock_grader = MagicMock(spec=AssayGraderProtocol)
+        self.checker = SpotChecker(self.config, self.mock_grader)
+
+    def test_should_sample_always(self) -> None:
+        """Test with 100% sample rate."""
+        self.config.sample_rate = 1.0
+        self.assertTrue(self.checker.should_sample())
+
+    def test_should_sample_never(self) -> None:
+        """Test with 0% sample rate."""
+        self.config.sample_rate = 0.0
+        self.assertFalse(self.checker.should_sample())
+
+    def test_check_sample_success(self) -> None:
+        """Test successful grading."""
+        expected_result = GradeResult(faithfulness_score=0.9, safety_score=1.0, details={"reason": "good"})
+        self.mock_grader.grade_conversation.return_value = expected_result
+
+        conversation = {"messages": [{"role": "user", "content": "hello"}]}
+        result = self.checker.check_sample(conversation)
+
+        self.assertEqual(result, expected_result)
+        self.mock_grader.grade_conversation.assert_called_with(conversation)
+
+    def test_check_sample_failure(self) -> None:
+        """Test handling of grader failure."""
+        self.mock_grader.grade_conversation.side_effect = Exception("Grader down")
+
+        result = self.checker.check_sample({})
+        self.assertIsNone(result)
