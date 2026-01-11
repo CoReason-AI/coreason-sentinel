@@ -5,7 +5,6 @@ import pytest
 from pydantic import ValidationError
 
 from coreason_sentinel.models import (
-    AgentStatus,
     Alert,
     AlertSeverity,
     HealthReport,
@@ -118,11 +117,11 @@ def test_health_report_creation() -> None:
     now = datetime.now(timezone.utc)
     report = HealthReport(
         timestamp=now,
-        agent_status=AgentStatus.HEALTHY,
+        agent_status="HEALTHY",
         metrics={"avg_latency": "200ms"},
     )
     assert report.timestamp == now
-    assert report.agent_status == AgentStatus.HEALTHY
+    assert report.agent_status == "HEALTHY"
     assert report.metrics["avg_latency"] == "200ms"
     assert report.active_alerts == []
 
@@ -137,7 +136,7 @@ def test_health_report_complex_metrics() -> None:
         "is_active": True,
     }
 
-    report = HealthReport(timestamp=now, agent_status=AgentStatus.DEGRADED, metrics=complex_metrics)
+    report = HealthReport(timestamp=now, agent_status="DEGRADED", metrics=complex_metrics)
 
     # Verify nested access
     assert report.metrics["token_usage"]["total"] == 700
@@ -157,13 +156,102 @@ def test_health_report_with_alerts() -> None:
     alert = Alert(message="High latency", severity=AlertSeverity.WARNING)
     report = HealthReport(
         timestamp=now,
-        agent_status=AgentStatus.DEGRADED,
+        agent_status="DEGRADED",
         active_alerts=[alert],
     )
     assert len(report.active_alerts) == 1
     assert report.active_alerts[0].message == "High latency"
 
 
+def test_health_report_status_validation() -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status="INVALID_STATUS")
+
+
 def test_enums() -> None:
-    assert AgentStatus.HEALTHY == "HEALTHY"
     assert AlertSeverity.INFO == "INFO"
+
+
+# Edge Cases & Complex Scenarios
+
+
+def test_agent_status_case_sensitivity() -> None:
+    now = datetime.now(timezone.utc)
+    # Pydantic Literals are strict strings and case-sensitive
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status="healthy")
+
+
+def test_agent_status_whitespace() -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status=" HEALTHY")
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status="HEALTHY ")
+
+
+def test_agent_status_empty_string() -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status="")
+
+
+def test_health_report_history_bulk_serialization() -> None:
+    """
+    Simulates a scenario where we have a history of health reports (e.g. 50 snapshots).
+    Ensures that bulk serialization/deserialization works correctly and performantly.
+    """
+    history = []
+    base_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    for i in range(50):
+        status = "HEALTHY"
+        if i % 10 == 0:
+            status = "CRITICAL"
+        elif i % 5 == 0:
+            status = "DEGRADED"
+
+        report = HealthReport(
+            timestamp=base_time,  # In real scenario timestamp would increment
+            agent_status=status,
+            metrics={"tick": i},
+        )
+        history.append(report)
+
+    # Serialize list
+    json_output = json.dumps([h.model_dump(mode="json") for h in history])
+
+    # Deserialize list
+    loaded_data = json.loads(json_output)
+    restored_history = [HealthReport.model_validate(d) for d in loaded_data]
+
+    assert len(restored_history) == 50
+    assert restored_history[0].agent_status == "CRITICAL"  # 0 % 10 == 0
+    assert restored_history[5].agent_status == "DEGRADED"  # 5 % 5 == 0
+    assert restored_history[1].agent_status == "HEALTHY"
+    assert restored_history[49].metrics["tick"] == 49
+
+
+def test_health_report_timestamp_robustness() -> None:
+    """
+    Tests that HealthReport can handle slight variations in ISO timestamp strings
+    that Pydantic usually supports.
+    """
+    # 1. Standard ISO with Z
+    json_z = '{"timestamp": "2025-01-01T12:00:00Z", "agent_status": "HEALTHY", "metrics": {}}'
+    report_z = HealthReport.model_validate_json(json_z)
+    assert report_z.timestamp.year == 2025
+    assert report_z.timestamp.tzinfo == timezone.utc
+
+    # 2. ISO with offset
+    json_offset = '{"timestamp": "2025-01-01T12:00:00+00:00", "agent_status": "HEALTHY", "metrics": {}}'
+    report_offset = HealthReport.model_validate_json(json_offset)
+    assert report_offset.timestamp == report_z.timestamp
+
+    # 3. ISO without explicit timezone (Pydantic might interpret as naive, but we should check behavior)
+    # The field is just 'datetime', so it accepts naive. Best practice is to ensure UTC though.
+    json_naive = '{"timestamp": "2025-01-01T12:00:00", "agent_status": "HEALTHY", "metrics": {}}'
+    report_naive = HealthReport.model_validate_json(json_naive)
+    assert report_naive.timestamp.year == 2025
+    assert report_naive.timestamp.tzinfo is None
