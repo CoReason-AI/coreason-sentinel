@@ -31,7 +31,7 @@ class CircuitBreaker:
     Uses Redis for persistence to ensure stateless workers see the same state.
     """
 
-    def __init__(self, redis_client: Redis, config: SentinelConfig):
+    def __init__(self, redis_client: Redis[bytes], config: SentinelConfig):
         self.redis = redis_client
         self.config = config
         self.agent_id = config.agent_id
@@ -154,6 +154,24 @@ class CircuitBreaker:
         except Exception as e:
             logger.error(f"Failed to evaluate trigger {trigger.metric_name}: {e}")
             return False
+
+    def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
+        """
+        Retrieves the most recent raw values for a given metric.
+        Useful for statistical analysis (e.g., constructing distributions).
+        """
+        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
+        try:
+            # Get the last `limit` elements from the sorted set
+            # zrevrange returns elements in descending order of score (newest first)
+            events = self.redis.zrevrange(key, 0, limit - 1)
+            if not events:
+                return []
+
+            return [self._parse_value_from_member(m) for m in events]
+        except Exception as e:
+            logger.error(f"Failed to fetch recent values for {metric_name}: {e}")
+            return []
 
     def _parse_value_from_member(self, member: bytes) -> float:
         """

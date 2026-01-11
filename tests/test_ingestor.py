@@ -47,7 +47,7 @@ class TestTelemetryIngestor(unittest.TestCase):
         # Check record_metric calls
         self.mock_cb.record_metric.assert_any_call("latency", 100.0)
         self.mock_cb.record_metric.assert_any_call("tokens", 50.0)
-        # Check trigger evaluation
+        # Check trigger evaluation - called ONCE at the end
         self.mock_cb.check_triggers.assert_called_once()
 
     def test_process_event_samples_and_records_grade(self) -> None:
@@ -64,8 +64,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         self.mock_cb.record_metric.assert_any_call("faithfulness_score", 0.9)
         self.mock_cb.record_metric.assert_any_call("safety_score", 0.8)
 
-        # Check triggers called (once after metrics, once after grading)
-        self.assertEqual(self.mock_cb.check_triggers.call_count, 2)
+        # Check triggers called ONCE at the end
+        self.mock_cb.check_triggers.assert_called_once()
 
     def test_process_event_sample_failure(self) -> None:
         """Test handling when spot checker returns None."""
@@ -95,7 +95,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         self.mock_bp.get_baseline_vectors.assert_called_with("test-agent")
         mock_detect_drift.assert_called_with(baseline, [embedding])
         self.mock_cb.record_metric.assert_any_call("vector_drift", 0.5)
-        self.assertEqual(self.mock_cb.check_triggers.call_count, 2)  # once metrics, once drift
+        # Check triggers called ONCE at the end
+        self.mock_cb.check_triggers.assert_called_once()
 
     def test_drift_detection_exception(self) -> None:
         """Test error handling in drift detection."""
@@ -295,3 +296,63 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         # Verify set_state("OPEN") was called.
         mock_redis.set.assert_called_with("sentinel:breaker:storm-agent:state", "OPEN")
+
+    def test_output_drift_missing_methods(self) -> None:
+        """Test graceful handling when provider is missing distribution methods."""
+        # Provider raises AttributeError
+        self.mock_bp.get_baseline_output_length_distribution.side_effect = AttributeError("Old Provider")
+        self.mock_sc.should_sample.return_value = False
+
+        # Should not crash
+        self.ingestor.process_event(self.event)
+
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("output_drift_kl", calls)
+
+    def test_output_drift_empty_baseline(self) -> None:
+        """Test graceful handling of empty baseline."""
+        self.mock_bp.get_baseline_output_length_distribution.return_value = ([], [])
+        self.mock_sc.should_sample.return_value = False
+        self.ingestor.process_event(self.event)
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("output_drift_kl", calls)
+
+    def test_output_drift_no_recent_samples(self) -> None:
+        """Test graceful handling when no recent samples in Redis."""
+        self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
+        self.mock_sc.should_sample.return_value = False
+        # Redis returns empty list for get_recent_values
+        self.mock_cb.get_recent_values.return_value = []
+
+        self.ingestor.process_event(self.event)
+
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("output_drift_kl", calls)
+
+    @patch("coreason_sentinel.ingestor.DriftEngine.compute_kl_divergence")
+    def test_output_drift_kl_error(self, mock_kl: MagicMock) -> None:
+        """Test handling of KL computation error."""
+        self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
+        self.mock_sc.should_sample.return_value = False
+        self.mock_cb.get_recent_values.return_value = [5.0, 15.0]
+
+        mock_kl.side_effect = ValueError("KL Error")
+
+        self.ingestor.process_event(self.event)
+
+        # Should log warning but continue
+        self.mock_cb.check_triggers.assert_called_once()
+
+    @patch("coreason_sentinel.ingestor.logger")
+    def test_output_drift_general_exception(self, mock_logger: MagicMock) -> None:
+        """Test catching unexpected exception in drift logic."""
+        # Patch the method on the instance directly to ensure it raises
+        with patch.object(self.ingestor, "_process_output_drift", side_effect=Exception("Boom")) as mock_method:
+            self.mock_sc.should_sample.return_value = False
+
+            self.ingestor.process_event(self.event)
+
+            # Verify the mock was called
+            mock_method.assert_called_once()
+            # Verify logger error was called
+            mock_logger.error.assert_called_with("Failed to process output drift detection: Boom")

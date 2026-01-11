@@ -9,7 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 from datetime import datetime
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Protocol, Tuple
 
 from pydantic import BaseModel
 
@@ -78,5 +78,14 @@ class BaselineProviderProtocol(Protocol):
     def get_baseline_vectors(self, agent_id: str) -> List[List[float]]:
         """
         Retrieves the list of baseline vectors (embeddings) for the agent.
+        """
+        ...
+
+    def get_baseline_output_length_distribution(self, agent_id: str) -> Tuple[List[float], List[float]]:
+        """
+        Retrieves the baseline output length distribution.
+        Returns a tuple: (probabilities, bin_edges).
+        - probabilities: List of float probabilities summing to 1.0.
+        - bin_edges: List of floats defining the bin edges (len(probabilities) + 1).
         """
         ...
