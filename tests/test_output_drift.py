@@ -301,6 +301,7 @@ class TestOutputDriftDetection:
                 break
 
         assert length_call_found
+
     def test_gradual_drift_scenario(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
         """
         Complex Scenario: Gradual Drift.
@@ -321,7 +322,7 @@ class TestOutputDriftDetection:
                 redis_store[key].append((s, m if isinstance(m, bytes) else m.encode("utf-8")))
 
         def mock_zrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> List[bytes]:
-             # Return list of members for THIS key
+            # Return list of members for THIS key
             if key not in redis_store:
                 return []
             # Sort by score just in case, though zadd appends
@@ -383,7 +384,7 @@ class TestOutputDriftDetection:
             input_text="hi",
             output_text="word",
             metrics={"token_count": 15},
-            metadata={}
+            metadata={},
         )
 
         for _ in range(5):
@@ -403,7 +404,7 @@ class TestOutputDriftDetection:
             input_text="hi",
             output_text="word",
             metrics={"token_count": 25},
-            metadata={}
+            metadata={},
         )
 
         # 1st bad event: Window [25, 15, 15, 15, 15] -> Some drift
@@ -436,7 +437,7 @@ class TestOutputDriftDetection:
             input_text="hi",
             output_text="word",
             metrics={"token_count": 15},
-            metadata={}
+            metadata={},
         )
 
         ingestor.process_event(event)
@@ -470,7 +471,7 @@ class TestOutputDriftDetection:
             input_text="hi",
             output_text="word",
             metrics={"token_count": 1000},
-            metadata={}
+            metadata={},
         )
 
         ingestor.process_event(event)
