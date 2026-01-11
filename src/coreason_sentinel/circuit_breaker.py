@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 import uuid
 from enum import Enum
@@ -38,17 +39,29 @@ class CircuitBreaker:
         self.config = config
         self.agent_id = config.agent_id
         self._state_key = f"sentinel:breaker:{self.agent_id}:state"
+        self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
 
     def get_state(self) -> CircuitBreakerState:
         """
         Retrieves the current state from Redis.
         Defaults to CLOSED if no state is recorded.
+        AUTO-TRANSITION: If state is OPEN and cooldown has expired, transitions to HALF_OPEN.
         """
         try:
             state_bytes = self.redis.get(self._state_key)
             if state_bytes is None:
                 return CircuitBreakerState.CLOSED
-            return CircuitBreakerState(state_bytes.decode("utf-8"))
+
+            state = CircuitBreakerState(state_bytes.decode("utf-8"))
+
+            if state == CircuitBreakerState.OPEN:
+                # Check cooldown
+                if not self.redis.exists(self._cooldown_key):
+                    logger.info(f"Cooldown expired for {self.agent_id}. Transitioning to HALF_OPEN.")
+                    self.set_state(CircuitBreakerState.HALF_OPEN)
+                    return CircuitBreakerState.HALF_OPEN
+
+            return state
         except Exception as e:
             logger.error(f"Failed to fetch circuit breaker state from Redis: {e}")
             return CircuitBreakerState.CLOSED
@@ -59,10 +72,34 @@ class CircuitBreaker:
         """
         try:
             self.redis.set(self._state_key, state.value)
+
+            if state == CircuitBreakerState.OPEN:
+                # Set cooldown
+                self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
+
             logger.info(f"Circuit Breaker for {self.agent_id} transitioned to {state.value}")
         except Exception as e:
             logger.error(f"Failed to set circuit breaker state in Redis: {e}")
             raise e
+
+    def allow_request(self) -> bool:
+        """
+        Determines if a request should be allowed based on the current state.
+        CLOSED: Allow all.
+        OPEN: Block all.
+        HALF_OPEN: Allow 5% probabilistic trickle.
+        """
+        state = self.get_state()
+
+        if state == CircuitBreakerState.CLOSED:
+            return True
+        elif state == CircuitBreakerState.OPEN:
+            return False
+        elif state == CircuitBreakerState.HALF_OPEN:
+            # Allow 5% of traffic
+            return random.random() < 0.05
+
+        return True  # Fallback
 
     def record_metric(self, metric_name: str, value: float = 1.0) -> None:
         """
@@ -101,12 +138,16 @@ class CircuitBreaker:
         """
         Evaluates all configured triggers against the recorded metrics.
         If a trigger is violated, trips the breaker to OPEN.
+        If in HALF_OPEN and no trigger is violated, transitions to CLOSED.
         """
-        # If already OPEN, no need to check (or maybe we check for recovery? logic usually separates them)
-        if self.get_state() == CircuitBreakerState.OPEN:
+        state = self.get_state()
+
+        if state == CircuitBreakerState.OPEN:
             return
 
         now = time.time()
+        violation = False
+
         for trigger in self.config.circuit_breaker_triggers:
             if self._evaluate_trigger(trigger, now):
                 logger.warning(
@@ -114,7 +155,15 @@ class CircuitBreaker:
                     f"in last {trigger.window_seconds}s. Tripping Circuit Breaker."
                 )
                 self.set_state(CircuitBreakerState.OPEN)
+                violation = True
                 return
+
+        # Recovery Logic
+        if state == CircuitBreakerState.HALF_OPEN and not violation:
+            # If we are here, it means no triggers were violated.
+            # We assume the trickle traffic was successful.
+            logger.info(f"Circuit Breaker for {self.agent_id} recovering to CLOSED.")
+            self.set_state(CircuitBreakerState.CLOSED)
 
     def _evaluate_trigger(self, trigger: Trigger, now: float) -> bool:
         """
