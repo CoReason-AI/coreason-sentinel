@@ -47,9 +47,6 @@ class TelemetryIngestor:
             if isinstance(value, (int, float)):
                 self.circuit_breaker.record_metric(metric_name, float(value))
 
-        # Check triggers immediately after update
-        self.circuit_breaker.check_triggers()
-
         # 2. Spot Check (Audit)
         conversation = {
             "input": event.input_text,
@@ -65,9 +62,8 @@ class TelemetryIngestor:
                 # So we should record the score as a metric.
                 self.circuit_breaker.record_metric("faithfulness_score", grade.faithfulness_score)
                 self.circuit_breaker.record_metric("safety_score", grade.safety_score)
-                self.circuit_breaker.check_triggers()
 
-        # 3. Drift Detection
+        # 3. Drift Detection (Vector)
         embedding = event.metadata.get("embedding")
         if embedding and isinstance(embedding, list):
             try:
@@ -78,6 +74,56 @@ class TelemetryIngestor:
                     # Live batch is just the current event embedding wrapped in a list
                     drift_score = DriftEngine.detect_vector_drift(baselines, [embedding])
                     self.circuit_breaker.record_metric("vector_drift", drift_score)
-                    self.circuit_breaker.check_triggers()
             except Exception as e:
-                logger.error(f"Failed to process drift detection: {e}")
+                logger.error(f"Failed to process vector drift detection: {e}")
+
+        # 4. Drift Detection (Output Length)
+        try:
+            self._process_output_drift(event)
+        except Exception as e:
+            logger.error(f"Failed to process output drift detection: {e}")
+
+        # Final trigger check after all metrics
+        self.circuit_breaker.check_triggers()
+
+    def _process_output_drift(self, event: VeritasEvent) -> None:
+        """
+        Detects drift in output length (token count) using KL Divergence.
+        """
+        # 1. Determine Output Length
+        output_length = 0.0
+        if "completion_tokens" in event.metrics:
+            output_length = float(event.metrics["completion_tokens"])
+        elif "token_count" in event.metrics:
+            output_length = float(event.metrics["token_count"])
+        else:
+            # Fallback to crude approximation
+            output_length = float(len(event.output_text.split()))
+
+        # 2. Record this metric so it's in the sliding window
+        self.circuit_breaker.record_metric("output_length", output_length)
+
+        # 3. Retrieve Baseline Distribution
+        try:
+            baseline_dist, bin_edges = self.baseline_provider.get_baseline_output_length_distribution(event.agent_id)
+        except (AttributeError, NotImplementedError):
+            # Provider might not support it yet
+            return
+
+        if not baseline_dist or not bin_edges:
+            return
+
+        # 4. Construct Live Distribution
+        # Fetch recent samples
+        recent_samples = self.circuit_breaker.get_recent_values("output_length", self.config.drift_sample_window)
+        if not recent_samples:
+            return
+
+        live_dist = DriftEngine.compute_distribution_from_samples(recent_samples, bin_edges)
+
+        # 5. Compute KL Divergence
+        try:
+            kl_divergence = DriftEngine.compute_kl_divergence(baseline_dist, live_dist)
+            self.circuit_breaker.record_metric("output_drift_kl", kl_divergence)
+        except ValueError as e:
+            logger.warning(f"Skipping KL calculation due to validation error: {e}")

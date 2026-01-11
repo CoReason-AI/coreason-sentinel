@@ -19,7 +19,7 @@ def test_logger_initialization() -> None:
     assert logger is not None
 
 
-def test_logger_writing(capsys: CaptureFixture) -> None:
+def test_logger_writing(capsys: CaptureFixture[str]) -> None:
     """Test that logger writes to stderr."""
     # We need to add a sink that writes to sys.stderr so capsys can capture it
     # But loguru is already configured to write to sys.stderr in logger.py

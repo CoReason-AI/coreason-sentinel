@@ -291,3 +291,17 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.breaker.check_triggers()
 
         self.mock_redis.set.assert_not_called()
+
+    def test_get_recent_values_exception(self) -> None:
+        """Test error handling when fetching recent values fails."""
+        self.mock_redis.zrevrange.side_effect = Exception("Redis Down")
+        values = self.breaker.get_recent_values("test_metric")
+        self.assertEqual(values, [])
+        # We can't easily assert logger call with loguru unless we capture it,
+        # but coverage will show the line run.
+
+    def test_get_recent_values_empty(self) -> None:
+        """Test fetching recent values returns empty list if none found."""
+        self.mock_redis.zrevrange.return_value = []
+        values = self.breaker.get_recent_values("test_metric")
+        self.assertEqual(values, [])

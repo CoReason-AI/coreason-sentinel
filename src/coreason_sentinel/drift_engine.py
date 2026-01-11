@@ -8,7 +8,7 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
-from typing import List, Union
+from typing import List, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -136,3 +136,41 @@ class DriftEngine:
         # Re-using scipy cosine distance logic:
         # Distance = 1 - Similarity
         return 1.0 - similarity
+
+    @staticmethod
+    def compute_distribution_from_samples(samples: List[float], bin_edges: List[float]) -> List[float]:
+        """
+        Converts a list of raw samples into a probability distribution (PMF)
+        based on the provided bin edges.
+
+        Args:
+            samples: List of raw values (e.g., output lengths).
+            bin_edges: List of float values defining the bin edges.
+                       Must be monotonically increasing.
+                       Length must be len(output_distribution) + 1.
+
+        Returns:
+            List[float]: Probability of samples falling into each bin.
+        """
+        if not samples:
+            # If no samples, return a uniform distribution or zeros?
+            # Returning zeros might cause KL issues, but compute_kl_divergence handles epsilon.
+            # However, standard practice is uniform or raising error.
+            # Let's return zeros, relying on KL smoothing.
+            return [0.0] * (len(bin_edges) - 1)
+
+        hist, _ = np.histogram(samples, bins=bin_edges, density=True)
+        # np.histogram with density=True returns the value of the probability density function at the bin,
+        # normalized such that the integral over the range is 1.
+        # However, for discrete PMF comparison (KL), we often want the *probability mass* (sum(p)=1).
+        # If bins are not unit width, density values != probabilities.
+        # KL expects P and Q to sum to 1.
+        # Let's use simple counts and normalize manually to be safe.
+
+        counts, _ = np.histogram(samples, bins=bin_edges)
+        total = np.sum(counts)
+        if total == 0:
+            return [0.0] * (len(bin_edges) - 1)
+
+        probabilities = counts / total
+        return cast(List[float], probabilities.tolist())
