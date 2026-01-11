@@ -11,6 +11,8 @@ packages = [{include = "coreason_sentinel", from = "src"}]
 python = ">=3.12, <3.15"
 loguru = "^0.7.2"
 pydantic = "^2.12.5"
+numpy = "^2.4.1"
+scipy = "^1.16.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.2"
