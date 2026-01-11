@@ -36,6 +36,9 @@ class SentinelConfig(BaseModel):
     drift_sample_window: int = Field(
         100, gt=0, description="Number of recent samples to use for live distribution calculation."
     )
+    recovery_timeout: int = Field(
+        60, gt=0, description="Cooldown time in seconds before attempting recovery from OPEN state."
+    )
     circuit_breaker_triggers: List[Trigger] = Field(
         default_factory=list, description="List of triggers that can trip the circuit breaker."
     )
