@@ -107,9 +107,13 @@ class TelemetryIngestor:
         # 2. Sentiment Detection (Regex)
         # We check the input_text for user frustration signals
         for pattern in self.config.sentiment_regex_patterns:
-            if re.search(pattern, event.input_text, re.IGNORECASE):
-                metrics["sentiment_frustration_count"] = 1.0
-                break  # Count once per event
+            try:
+                if re.search(pattern, event.input_text, re.IGNORECASE):
+                    metrics["sentiment_frustration_count"] = 1.0
+                    break  # Count once per event
+            except re.error as e:
+                logger.error(f"Invalid regex pattern '{pattern}' in configuration: {e}")
+                continue
 
         return metrics
 
