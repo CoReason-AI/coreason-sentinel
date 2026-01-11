@@ -18,6 +18,9 @@ class Trigger(BaseModel):
     operator: Literal[">", "<"] = Field(
         ">", description="Comparison operator. Default is '>' (greater than threshold)."
     )
+    aggregation_method: Literal["SUM", "AVG", "COUNT", "MIN", "MAX"] = Field(
+        "SUM", description="Aggregation method for the metric over the window. Default is SUM."
+    )
 
 
 class SentinelConfig(BaseModel):
