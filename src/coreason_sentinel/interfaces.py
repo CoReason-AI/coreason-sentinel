@@ -68,3 +68,15 @@ class AssayGraderProtocol(Protocol):
         Sends a conversation to the Assay Judge for grading.
         """
         ...
+
+
+class BaselineProviderProtocol(Protocol):
+    """
+    Interface for retrieving Baseline Signatures.
+    """
+
+    def get_baseline_vectors(self, agent_id: str) -> List[List[float]]:
+        """
+        Retrieves the list of baseline vectors (embeddings) for the agent.
+        """
+        ...

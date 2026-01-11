@@ -10,7 +10,8 @@
 
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
-from coreason_sentinel.interfaces import VeritasEvent
+from coreason_sentinel.drift_engine import DriftEngine
+from coreason_sentinel.interfaces import BaselineProviderProtocol, VeritasEvent
 from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 from coreason_sentinel.utils.logger import logger
@@ -22,10 +23,17 @@ class TelemetryIngestor:
     Routes events to Circuit Breaker, Spot Checker, and Drift Engine.
     """
 
-    def __init__(self, config: SentinelConfig, circuit_breaker: CircuitBreaker, spot_checker: SpotChecker):
+    def __init__(
+        self,
+        config: SentinelConfig,
+        circuit_breaker: CircuitBreaker,
+        spot_checker: SpotChecker,
+        baseline_provider: BaselineProviderProtocol,
+    ):
         self.config = config
         self.circuit_breaker = circuit_breaker
         self.spot_checker = spot_checker
+        self.baseline_provider = baseline_provider
 
     def process_event(self, event: VeritasEvent) -> None:
         """
@@ -60,5 +68,16 @@ class TelemetryIngestor:
                 self.circuit_breaker.check_triggers()
 
         # 3. Drift Detection
-        # (Pending implementation: requires baseline vector store and batching)
-        # We leave this as a placeholder or future atomic unit.
+        embedding = event.metadata.get("embedding")
+        if embedding and isinstance(embedding, list):
+            try:
+                # Retrieve baselines
+                baselines = self.baseline_provider.get_baseline_vectors(event.agent_id)
+                if baselines:
+                    # Calculate drift
+                    # Live batch is just the current event embedding wrapped in a list
+                    drift_score = DriftEngine.detect_vector_drift(baselines, [embedding])
+                    self.circuit_breaker.record_metric("vector_drift", drift_score)
+                    self.circuit_breaker.check_triggers()
+            except Exception as e:
+                logger.error(f"Failed to process drift detection: {e}")
