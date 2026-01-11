@@ -9,6 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 
+import re
+from typing import Dict
+
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
 from coreason_sentinel.interfaces import BaselineProviderProtocol, VeritasEvent
@@ -46,6 +49,11 @@ class TelemetryIngestor:
         for metric_name, value in event.metrics.items():
             if isinstance(value, (int, float)):
                 self.circuit_breaker.record_metric(metric_name, float(value))
+
+        # 1.5 Extract Custom Metrics (Refusal & Sentiment)
+        custom_metrics = self._extract_custom_metrics(event)
+        for metric_name, value in custom_metrics.items():
+            self.circuit_breaker.record_metric(metric_name, value)
 
         # 2. Spot Check (Audit)
         conversation = {
@@ -85,6 +93,29 @@ class TelemetryIngestor:
 
         # Final trigger check after all metrics
         self.circuit_breaker.check_triggers()
+
+    def _extract_custom_metrics(self, event: VeritasEvent) -> Dict[str, float]:
+        """
+        Extracts custom metrics based on metadata flags and regex patterns.
+        """
+        metrics: Dict[str, float] = {}
+
+        # 1. Refusal Detection
+        if event.metadata.get("is_refusal"):
+            metrics["refusal_count"] = 1.0
+
+        # 2. Sentiment Detection (Regex)
+        # We check the input_text for user frustration signals
+        for pattern in self.config.sentiment_regex_patterns:
+            try:
+                if re.search(pattern, event.input_text, re.IGNORECASE):
+                    metrics["sentiment_frustration_count"] = 1.0
+                    break  # Count once per event
+            except re.error as e:
+                logger.error(f"Invalid regex pattern '{pattern}' in configuration: {e}")
+                continue
+
+        return metrics
 
     def _process_output_drift(self, event: VeritasEvent) -> None:
         """

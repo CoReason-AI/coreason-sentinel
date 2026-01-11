@@ -356,3 +356,147 @@ class TestTelemetryIngestor(unittest.TestCase):
             mock_method.assert_called_once()
             # Verify logger error was called
             mock_logger.error.assert_called_with("Failed to process output drift detection: Boom")
+
+    def test_extract_refusal_metric(self) -> None:
+        """Test that refusal flag in metadata records a metric."""
+        self.event.metadata["is_refusal"] = True
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("refusal_count", 1.0)
+
+    def test_extract_sentiment_metric(self) -> None:
+        """Test that configured regex patterns trigger sentiment metric."""
+        # Default config has "STOP"
+        self.event.input_text = "Please STOP this now."
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_sentiment_metric_custom_config(self) -> None:
+        """Test that custom regex patterns work."""
+        self.config.sentiment_regex_patterns = ["^HATE"]
+        self.event.input_text = "HATE this result"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_sentiment_no_match(self) -> None:
+        """Test that no metric is recorded if no match."""
+        self.event.input_text = "I love this result"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        # Ensure sentiment metric was NOT recorded
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("sentiment_frustration_count", calls)
+
+    @patch("coreason_sentinel.ingestor.logger")
+    def test_extract_sentiment_invalid_regex(self, mock_logger: MagicMock) -> None:
+        """Test that invalid regex patterns are handled gracefully."""
+        self.config.sentiment_regex_patterns = ["[", "STOP"]  # First invalid, second valid
+        self.event.input_text = "Please STOP"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        # Verify invalid regex logged error
+        # The error message varies by Python version ("unterminated character set" vs "bad character range")
+        # We check that the start of the message is correct.
+        found_call = False
+        for call_args in mock_logger.error.call_args_list:
+            arg = call_args[0][0]
+            if "Invalid regex pattern '[' in configuration:" in arg:
+                found_call = True
+                break
+        self.assertTrue(found_call, "Did not find expected error log for invalid regex")
+
+        # Verify valid pattern still worked
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_sentiment_empty_input(self) -> None:
+        """Test behavior with empty input text."""
+        self.event.input_text = ""
+        self.mock_sc.should_sample.return_value = False
+        self.ingestor.process_event(self.event)
+        # Should not record metric
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("sentiment_frustration_count", calls)
+
+    def test_extract_refusal_false_metadata(self) -> None:
+        """Test that is_refusal=False records nothing."""
+        self.event.metadata["is_refusal"] = False
+        self.mock_sc.should_sample.return_value = False
+        self.ingestor.process_event(self.event)
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("refusal_count", calls)
+
+    def test_extract_mixed_signals(self) -> None:
+        """Test 'Mixed Signals': Event is BOTH a refusal AND has negative sentiment."""
+        self.event.metadata["is_refusal"] = True
+        self.event.input_text = "STOP replying badly"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("refusal_count", 1.0)
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_extract_overlapping_regex(self) -> None:
+        """Test that multiple matching regexes only record ONE metric per event."""
+        # Both "STOP" and "BAD" match
+        self.config.sentiment_regex_patterns = ["STOP", "BAD"]
+        self.event.input_text = "STOP being BAD"
+        self.mock_sc.should_sample.return_value = False
+
+        self.ingestor.process_event(self.event)
+
+        # Verify only ONE sentiment call (plus latency/tokens)
+        sentiment_calls = [
+            c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "sentiment_frustration_count"
+        ]
+        self.assertEqual(len(sentiment_calls), 1)
+
+    def test_complex_meltdown_scenario(self) -> None:
+        """
+        Scenario: 'The Meltdown'.
+        Simulates a stream of events with high refusal and frustration rates.
+        Verifies that metrics are consistently recorded.
+        """
+        self.config.sentiment_regex_patterns = ["FAIL"]
+        self.mock_sc.should_sample.return_value = False
+
+        # 10 events: 5 refusals, 5 frustration, 3 overlapping
+        events = []
+        for i in range(10):
+            evt = VeritasEvent(
+                event_id=f"evt-{i}",
+                timestamp=datetime.now(timezone.utc),
+                agent_id="test-agent",
+                session_id="sess-1",
+                input_text="System FAIL" if i < 5 else "Normal request",
+                output_text="...",
+                metrics={},
+                metadata={"is_refusal": i >= 3},  # Refusals for i=3..9 (7 total actually)
+            )
+            events.append(evt)
+
+        for evt in events:
+            self.ingestor.process_event(evt)
+
+        # Verification
+        # Sentiment: i=0,1,2,3,4 -> 5 calls
+        sentiment_calls = [
+            c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "sentiment_frustration_count"
+        ]
+        self.assertEqual(len(sentiment_calls), 5)
+
+        # Refusals: i=3..9 -> 7 calls
+        refusal_calls = [c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "refusal_count"]
+        self.assertEqual(len(refusal_calls), 7)
