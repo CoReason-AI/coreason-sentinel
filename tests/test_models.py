@@ -5,7 +5,6 @@ import pytest
 from pydantic import ValidationError
 
 from coreason_sentinel.models import (
-    AgentStatus,
     Alert,
     AlertSeverity,
     HealthReport,
@@ -118,11 +117,11 @@ def test_health_report_creation() -> None:
     now = datetime.now(timezone.utc)
     report = HealthReport(
         timestamp=now,
-        agent_status=AgentStatus.HEALTHY,
+        agent_status="HEALTHY",
         metrics={"avg_latency": "200ms"},
     )
     assert report.timestamp == now
-    assert report.agent_status == AgentStatus.HEALTHY
+    assert report.agent_status == "HEALTHY"
     assert report.metrics["avg_latency"] == "200ms"
     assert report.active_alerts == []
 
@@ -137,7 +136,7 @@ def test_health_report_complex_metrics() -> None:
         "is_active": True,
     }
 
-    report = HealthReport(timestamp=now, agent_status=AgentStatus.DEGRADED, metrics=complex_metrics)
+    report = HealthReport(timestamp=now, agent_status="DEGRADED", metrics=complex_metrics)
 
     # Verify nested access
     assert report.metrics["token_usage"]["total"] == 700
@@ -157,13 +156,18 @@ def test_health_report_with_alerts() -> None:
     alert = Alert(message="High latency", severity=AlertSeverity.WARNING)
     report = HealthReport(
         timestamp=now,
-        agent_status=AgentStatus.DEGRADED,
+        agent_status="DEGRADED",
         active_alerts=[alert],
     )
     assert len(report.active_alerts) == 1
     assert report.active_alerts[0].message == "High latency"
 
 
+def test_health_report_status_validation() -> None:
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValidationError):
+        HealthReport(timestamp=now, agent_status="INVALID_STATUS")
+
+
 def test_enums() -> None:
-    assert AgentStatus.HEALTHY == "HEALTHY"
     assert AlertSeverity.INFO == "INFO"

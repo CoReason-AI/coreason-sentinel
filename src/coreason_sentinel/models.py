@@ -59,19 +59,13 @@ class Alert(BaseModel):
     )
 
 
-class AgentStatus(str, Enum):
-    HEALTHY = "HEALTHY"
-    DEGRADED = "DEGRADED"
-    CRITICAL = "CRITICAL"
-
-
 class HealthReport(BaseModel):
     """
     A snapshot of the agent's health.
     """
 
     timestamp: datetime = Field(..., description="Time of the report.")
-    agent_status: AgentStatus = Field(..., description="Current status of the agent.")
+    agent_status: Literal["HEALTHY", "DEGRADED", "CRITICAL"] = Field(..., description="Current status of the agent.")
     metrics: Dict[str, Any] = Field(
         default_factory=dict,
         description="Key-value pairs of current metrics (e.g., avg_latency, live_faithfulness_score).",
