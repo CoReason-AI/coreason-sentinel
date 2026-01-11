@@ -33,6 +33,9 @@ class SentinelConfig(BaseModel):
         0.01, ge=0.0, le=1.0, description="Fraction of traffic to sample (0.0 to 1.0). Default 1%."
     )
     drift_threshold_kl: float = Field(0.5, ge=0.0, description="KL Divergence threshold for output drift detection.")
+    drift_sample_window: int = Field(
+        100, gt=0, description="Number of recent samples to use for live distribution calculation."
+    )
     circuit_breaker_triggers: List[Trigger] = Field(
         default_factory=list, description="List of triggers that can trip the circuit breaker."
     )
