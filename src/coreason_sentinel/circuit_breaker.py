@@ -8,6 +8,7 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
+import math
 import time
 import uuid
 from enum import Enum
@@ -66,6 +67,11 @@ class CircuitBreaker:
         Records a metric event into a Redis Sorted Set (Sliding Window).
         The score is the timestamp, the member is "{timestamp}:{value}:{uuid}".
         """
+        # Validate input (NaN/Inf check)
+        if not math.isfinite(value):
+            logger.warning(f"Ignoring invalid metric value: {value} for {metric_name}")
+            return
+
         key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
         timestamp = time.time()
         # Unique member to allow multiple events at same timestamp
@@ -120,15 +126,29 @@ class CircuitBreaker:
             # zrangebyscore returns list of members
             events = self.redis.zrangebyscore(key, start_time, "+inf")
             if not events:
-                total_value = 0.0
-            else:
-                total_value = sum(self._parse_value_from_member(m) for m in events)
+                # If no events, we consider value 0.0 for SUM/COUNT, but for AVG/MIN/MAX it's undefined.
+                # Usually we don't trip if no data.
+                return False
+
+            values = [self._parse_value_from_member(m) for m in events]
+
+            aggregated_value = 0.0
+            if trigger.aggregation_method == "SUM":
+                aggregated_value = sum(values)
+            elif trigger.aggregation_method == "COUNT":
+                aggregated_value = float(len(values))
+            elif trigger.aggregation_method == "AVG":
+                aggregated_value = sum(values) / len(values)
+            elif trigger.aggregation_method == "MIN":
+                aggregated_value = min(values)
+            elif trigger.aggregation_method == "MAX":
+                aggregated_value = max(values)
 
             # Compare
             if trigger.operator == ">":
-                return total_value > trigger.threshold
+                return aggregated_value > trigger.threshold
             elif trigger.operator == "<":
-                return total_value < trigger.threshold
+                return aggregated_value < trigger.threshold
             return False
 
         except Exception as e:

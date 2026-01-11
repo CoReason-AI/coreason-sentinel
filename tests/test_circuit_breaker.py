@@ -65,7 +65,9 @@ class TestCircuitBreakerState(unittest.TestCase):
 class TestCircuitBreakerLogic(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.trigger = Trigger(metric_name="error_count", threshold=5, window_seconds=60, operator=">")
+        self.trigger = Trigger(
+            metric_name="error_count", threshold=5, window_seconds=60, operator=">", aggregation_method="SUM"
+        )
         self.config = SentinelConfig(agent_id="test-agent", circuit_breaker_triggers=[self.trigger])
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
@@ -99,6 +101,16 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.assertEqual(args[1], "-inf")
         # Ensure the 3rd arg is a float timestamp
         self.assertIsInstance(args[2], float)
+
+    def test_record_metric_nan(self) -> None:
+        """Test that NaN values are ignored."""
+        self.breaker.record_metric("error_count", float("nan"))
+        self.mock_redis.zadd.assert_not_called()
+
+    def test_record_metric_inf(self) -> None:
+        """Test that Inf values are ignored."""
+        self.breaker.record_metric("error_count", float("inf"))
+        self.mock_redis.zadd.assert_not_called()
 
     def test_evaluate_trigger_trips(self) -> None:
         """Test that exceeding threshold trips the breaker."""
@@ -149,7 +161,9 @@ class TestCircuitBreakerLogic(unittest.TestCase):
     def test_sum_metric_logic(self) -> None:
         """Test that values are summed correctly (e.g. Cost)."""
         # Trigger: Cost > 100
-        cost_trigger = Trigger(metric_name="cost", threshold=100, window_seconds=60, operator=">")
+        cost_trigger = Trigger(
+            metric_name="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
+        )
         self.config.circuit_breaker_triggers = [cost_trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
@@ -186,7 +200,9 @@ class TestCircuitBreakerLogic(unittest.TestCase):
     def test_operator_less_than(self) -> None:
         """Test '<' operator."""
         # Trigger: quality < 0.5
-        trigger = Trigger(metric_name="quality", threshold=0.5, window_seconds=60, operator="<")
+        trigger = Trigger(
+            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        )
         self.config.circuit_breaker_triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
@@ -198,7 +214,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
         self.breaker.check_triggers()
 
-        # Should trip
+        # Should trip (AVG is 0.4 < 0.5)
         self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_evaluate_empty_events(self) -> None:
@@ -206,30 +222,63 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.zrangebyscore.return_value = []
         self.mock_redis.get.return_value = b"CLOSED"
 
-        # Total value = 0.0. 0.0 !> 5. No trip.
+        # AVG with empty events -> Returns False (no data)
+        trigger = Trigger(
+            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        )
+        self.config.circuit_breaker_triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+
         self.breaker.check_triggers()
         self.mock_redis.set.assert_not_called()
 
-        # If trigger is < 0.1, it should trip (since 0.0 < 0.1)
-        trigger_low = Trigger(metric_name="quality", threshold=0.1, window_seconds=60, operator="<")
-        self.config.circuit_breaker_triggers = [trigger_low]
+    def test_aggregation_count(self) -> None:
+        """Test COUNT aggregation."""
+        trigger = Trigger(
+            metric_name="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
+        )
+        self.config.circuit_breaker_triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
+
+        # 3 events
+        now = time.time()
+        members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(3)]
+        self.mock_redis.zrangebyscore.return_value = members
+        self.mock_redis.get.return_value = b"CLOSED"
+
         self.breaker.check_triggers()
         self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
+    def test_aggregation_min_max(self) -> None:
+        """Test MIN and MAX aggregation."""
+        now = time.time()
+        members = [f"{now}:1.0:id1".encode("utf-8"), f"{now}:5.0:id2".encode("utf-8")]
+        self.mock_redis.zrangebyscore.return_value = members
+        self.mock_redis.get.return_value = b"CLOSED"
+
+        # MAX > 4 -> Trip
+        trigger = Trigger(metric_name="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX")
+        self.config.circuit_breaker_triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker.check_triggers()
+        self.mock_redis.set.assert_called()
+        self.mock_redis.set.reset_mock()
+
+        # MIN < 2 -> Trip
+        trigger = Trigger(metric_name="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN")
+        self.config.circuit_breaker_triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker.check_triggers()
+        self.mock_redis.set.assert_called()
+
     def test_return_false_on_unknown_operator(self) -> None:
         """Test invalid operator."""
-        # Force an invalid operator (bypass strict type check in constructor via object assignment or mock)
-        # Or just use logic check if code handles else.
-        # Code: if > .. elif < .. return False.
-
-        # We need to construct a trigger with invalid operator.
-        # Since pydantic validates, we mock it.
         mock_trigger = MagicMock(spec=Trigger)
         mock_trigger.metric_name = "test"
         mock_trigger.threshold = 10
         mock_trigger.window_seconds = 60
-        mock_trigger.operator = "=="  # Invalid
+        mock_trigger.operator = "=="
+        mock_trigger.aggregation_method = "SUM"
 
         self.config.circuit_breaker_triggers = [mock_trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
@@ -241,5 +290,4 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
         self.breaker.check_triggers()
 
-        # Should not trip because "==" is not handled -> returns False
         self.mock_redis.set.assert_not_called()
