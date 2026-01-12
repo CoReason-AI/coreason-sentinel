@@ -29,8 +29,9 @@ class TestOTELSpanIngestion:
         circuit_breaker = MagicMock()
         spot_checker = MagicMock()
         baseline_provider = MagicMock()
+        veritas_client = MagicMock()
 
-        ingestor = TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider)
+        ingestor = TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider, veritas_client)
         return ingestor, circuit_breaker
 
     def test_process_span_latency_calculation(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
@@ -191,8 +192,9 @@ class TestOTELSpanIngestion:
         circuit_breaker = MagicMock()
         spot_checker = MagicMock()
         baseline_provider = MagicMock()
+        veritas_client = MagicMock()
 
-        ingestor = TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider)
+        ingestor = TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider, veritas_client)
 
         # 1. Normal Span: 1000 tokens -> $0.02 cost.
         span_normal = OTELSpan(
