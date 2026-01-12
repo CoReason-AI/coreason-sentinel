@@ -22,7 +22,7 @@ class TestSpotChecker(unittest.TestCase):
             agent_id="test-agent",
             owner_email="test@example.com",
             phoenix_endpoint="http://localhost:6006",
-            sample_rate=0.1,
+            sampling_rate=0.1,
             triggers=[],
         )
         self.mock_grader = MagicMock(spec=AssayGraderProtocol)

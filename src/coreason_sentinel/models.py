@@ -2,13 +2,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CircuitBreakerTrigger(BaseModel):
     """
     Defines a condition that triggers the Circuit Breaker.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     metric: str = Field(..., description="The name of the metric to monitor (e.g., 'faithfulness', 'latency', 'cost').")
     threshold: float = Field(..., description="The value threshold that triggers the breaker.")
@@ -28,6 +30,8 @@ class ConditionalSamplingRule(BaseModel):
     Defines a rule for conditional sampling based on event metadata.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     metadata_key: str = Field(..., description="The key in the metadata dictionary to check.")
     operator: Literal["EQUALS", "CONTAINS", "EXISTS"] = Field(..., description="The comparison operator.")
     value: Any = Field(None, description="The value to compare against. Ignored for EXISTS.")
@@ -38,6 +42,8 @@ class SentinelConfig(BaseModel):
     """
     Configuration for the Sentinel monitor.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     agent_id: str = Field(..., description="Unique identifier for the agent being monitored.")
     owner_email: str = Field(..., description="Email address for notifications.")
@@ -71,6 +77,8 @@ class HealthReport(BaseModel):
     """
     A snapshot of the agent's health.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     timestamp: datetime = Field(..., description="Time of the report.")
     breaker_state: Literal["CLOSED", "OPEN", "HALF_OPEN"] = Field(..., description="Current state of the Circuit Breaker.")
