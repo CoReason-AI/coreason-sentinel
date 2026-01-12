@@ -91,14 +91,24 @@ class TelemetryIngestor:
         """
         try:
             events = self.veritas_client.fetch_logs(self.config.agent_id, since)
-            count = 0
-            for event in events:
-                self.process_event(event)
-                count += 1
-            return count
         except Exception as e:
             logger.error(f"Failed to fetch logs from Veritas: {e}")
             return 0
+
+        if not events:
+            return 0
+
+        count = 0
+        for event in events:
+            try:
+                self.process_event(event)
+                count += 1
+            except Exception as e:
+                logger.error(f"Failed to process event {event.event_id}: {e}")
+                # Continue processing other events
+                continue
+
+        return count
 
     def process_event(self, event: VeritasEvent) -> None:
         """
