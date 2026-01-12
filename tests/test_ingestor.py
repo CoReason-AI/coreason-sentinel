@@ -272,7 +272,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         """
         from redis import Redis
 
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
         mock_redis = MagicMock(spec=Redis)
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
 
         # Trigger: Vector Drift > 0.5 (AVG) in 60s
         trigger = CircuitBreakerTrigger(
@@ -286,7 +289,7 @@ class TestTelemetryIngestor(unittest.TestCase):
             triggers=[trigger],
         )
 
-        real_cb = CircuitBreaker(mock_redis, config)
+        real_cb = CircuitBreaker(mock_redis, config, mock_notification_service)
         mock_sc = MagicMock(spec=SpotChecker)
         mock_sc.should_sample.return_value = False
         mock_bp = MagicMock(spec=BaselineProviderProtocol)
@@ -355,7 +358,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         # 1. Setup Logic with Mocks
         from redis import Redis
 
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
         mock_redis = MagicMock(spec=Redis)
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
 
         # Trigger: Faithfulness < 0.5 (AVG).
         trigger = CircuitBreakerTrigger(
@@ -369,7 +375,7 @@ class TestTelemetryIngestor(unittest.TestCase):
             triggers=[trigger],
         )
 
-        real_cb = CircuitBreaker(mock_redis, config)
+        real_cb = CircuitBreaker(mock_redis, config, mock_notification_service)
 
         from coreason_sentinel.interfaces import AssayGraderProtocol
 

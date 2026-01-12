@@ -105,3 +105,21 @@ class BaselineProviderProtocol(Protocol):
         - bin_edges: List of floats defining the bin edges (len(probabilities) + 1).
         """
         ...
+
+
+class NotificationServiceProtocol(Protocol):
+    """
+    Interface for the Notification Service (Identity).
+    Responsible for sending alerts when critical events occur (e.g., Circuit Breaker Trips).
+    """
+
+    def send_critical_alert(self, email: str, agent_id: str, reason: str) -> None:
+        """
+        Sends a critical alert notification.
+
+        Args:
+            email: The recipient's email address (from SentinelConfig).
+            agent_id: The ID of the agent that triggered the alert.
+            reason: The description of why the alert was triggered (e.g., trigger violation).
+        """
+        ...

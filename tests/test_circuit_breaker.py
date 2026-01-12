@@ -15,12 +15,14 @@ from unittest.mock import MagicMock, patch
 from redis import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
+from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 class TestCircuitBreakerState(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         self.config = SentinelConfig(
             agent_id="test-agent",
             owner_email="test@example.com",
@@ -28,7 +30,7 @@ class TestCircuitBreakerState(unittest.TestCase):
             triggers=[],
             recovery_timeout=60,
         )
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
     def test_get_state_default(self) -> None:
         """Test that get_state returns CLOSED if key is missing."""
@@ -59,6 +61,21 @@ class TestCircuitBreakerState(unittest.TestCase):
         self.breaker.set_state(CircuitBreakerState.OPEN)
         self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
         self.mock_redis.setex.assert_called_with("sentinel:breaker:test-agent:cooldown", 60, "1")
+
+    def test_set_state_open_sends_alert(self) -> None:
+        """Test that setting OPEN sends a critical alert."""
+        reason = "Manual Trip"
+        self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
+        self.mock_notification_service.send_critical_alert.assert_called_once_with(
+            email="test@example.com", agent_id="test-agent", reason=reason
+        )
+
+    def test_set_state_open_alert_failure(self) -> None:
+        """Test that alert failure doesn't crash the breaker."""
+        self.mock_notification_service.send_critical_alert.side_effect = Exception("Email Down")
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        # Should proceed to log but not crash
+        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_get_state_auto_recovery_from_open(self) -> None:
         """Test OPEN -> HALF_OPEN transition when cooldown expires."""
@@ -99,6 +116,7 @@ class TestCircuitBreakerState(unittest.TestCase):
 class TestCircuitBreakerLogic(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         self.trigger = CircuitBreakerTrigger(
             metric="error_count",
             threshold=5,
@@ -112,7 +130,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             phoenix_endpoint="http://localhost:6006",
             triggers=[self.trigger],
         )
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
     def test_allow_request_closed(self) -> None:
         self.mock_redis.get.return_value = b"CLOSED"
@@ -229,7 +247,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
         )
         self.config.triggers = [cost_trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         now = time.time()
         members = [f"{now}:60.0:id1".encode("utf-8"), f"{now}:60.0:id2".encode("utf-8")]
@@ -261,7 +279,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
         self.config.triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         now = time.time()
         members = [f"{now}:0.4:id1".encode("utf-8")]
@@ -280,7 +298,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
         self.config.triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         self.breaker.check_triggers()
         self.mock_redis.set.assert_not_called()
@@ -291,7 +309,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
         )
         self.config.triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         now = time.time()
         members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(3)]
@@ -313,7 +331,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX"
         )
         self.config.triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
         self.mock_redis.set.assert_called()
         self.mock_redis.set.reset_mock()
@@ -323,7 +341,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
             metric="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN"
         )
         self.config.triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
         self.mock_redis.set.assert_called()
 
@@ -337,7 +355,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         mock_trigger.aggregation_method = "SUM"
 
         self.config.triggers = [mock_trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         now = time.time()
         members = [f"{now}:100.0:id1".encode("utf-8")]
@@ -383,6 +401,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 class TestCircuitBreakerComplexScenarios(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         self.trigger_error = CircuitBreakerTrigger(
             metric="errors",
             threshold=5,
@@ -404,7 +423,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
             triggers=[self.trigger_error, self.trigger_latency],
             recovery_timeout=60,
         )
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
     def test_auto_transition_failure(self) -> None:
         """
