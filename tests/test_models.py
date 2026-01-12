@@ -5,17 +5,15 @@ import pytest
 from pydantic import ValidationError
 
 from coreason_sentinel.models import (
-    Alert,
-    AlertSeverity,
     HealthReport,
     SentinelConfig,
-    Trigger,
+    CircuitBreakerTrigger,
 )
 
 
 def test_trigger_creation() -> None:
-    trigger = Trigger(metric_name="error_rate", threshold=0.05, window_seconds=60)
-    assert trigger.metric_name == "error_rate"
+    trigger = CircuitBreakerTrigger(metric="error_rate", threshold=0.05, window_seconds=60)
+    assert trigger.metric == "error_rate"
     assert trigger.threshold == 0.05
     assert trigger.window_seconds == 60
     assert trigger.operator == ">"
@@ -23,77 +21,80 @@ def test_trigger_creation() -> None:
 
 def test_trigger_validation() -> None:
     with pytest.raises(ValidationError):
-        Trigger(metric_name="error_rate", threshold="invalid", window_seconds=60)
+        CircuitBreakerTrigger(metric="error_rate", threshold="invalid", window_seconds=60)
 
 
 def test_trigger_edge_cases() -> None:
     # Window seconds must be positive
     with pytest.raises(ValidationError):
-        Trigger(metric_name="error_rate", threshold=0.05, window_seconds=0)
+        CircuitBreakerTrigger(metric="error_rate", threshold=0.05, window_seconds=0)
 
     with pytest.raises(ValidationError):
-        Trigger(metric_name="error_rate", threshold=0.05, window_seconds=-10)
+        CircuitBreakerTrigger(metric="error_rate", threshold=0.05, window_seconds=-10)
 
     # Threshold can be negative (valid mathematical comparison)
-    t = Trigger(metric_name="score", threshold=-5.0, window_seconds=10)
+    t = CircuitBreakerTrigger(metric="score", threshold=-5.0, window_seconds=10)
     assert t.threshold == -5.0
 
 
 def test_sentinel_config_defaults() -> None:
-    config = SentinelConfig(agent_id="test-agent")
+    config = SentinelConfig(agent_id="test-agent", owner_email="test@example.com", phoenix_endpoint="http://localhost:6006")
     assert config.agent_id == "test-agent"
-    assert config.sample_rate == 0.01
+    assert config.owner_email == "test@example.com"
+    assert config.phoenix_endpoint == "http://localhost:6006"
+    assert config.sampling_rate == 0.01
     assert config.drift_threshold_kl == 0.5
-    assert config.circuit_breaker_triggers == []
-    assert config.notification_channels == []
+    assert config.triggers == []
 
 
 def test_sentinel_config_full() -> None:
-    trigger = Trigger(metric_name="cost", threshold=100, window_seconds=3600)
+    trigger = CircuitBreakerTrigger(metric="cost", threshold=100, window_seconds=3600)
     config = SentinelConfig(
         agent_id="test-agent",
-        sample_rate=0.1,
+        owner_email="test@example.com",
+        phoenix_endpoint="http://localhost:6006",
+        sampling_rate=0.1,
         drift_threshold_kl=0.8,
-        circuit_breaker_triggers=[trigger],
-        notification_channels=["admin@example.com"],
+        triggers=[trigger],
     )
-    assert config.sample_rate == 0.1
-    assert len(config.circuit_breaker_triggers) == 1
-    assert config.circuit_breaker_triggers[0].metric_name == "cost"
+    assert config.sampling_rate == 0.1
+    assert len(config.triggers) == 1
+    assert config.triggers[0].metric == "cost"
 
 
 def test_sentinel_config_edge_cases() -> None:
     # Sample rate limits
     with pytest.raises(ValidationError):
-        SentinelConfig(agent_id="test", sample_rate=-0.01)
+        SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", sampling_rate=-0.01)
 
     with pytest.raises(ValidationError):
-        SentinelConfig(agent_id="test", sample_rate=1.01)
+        SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", sampling_rate=1.01)
 
     # Valid boundary sample rates
-    c1 = SentinelConfig(agent_id="test", sample_rate=0.0)
-    assert c1.sample_rate == 0.0
-    c2 = SentinelConfig(agent_id="test", sample_rate=1.0)
-    assert c2.sample_rate == 1.0
+    c1 = SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", sampling_rate=0.0)
+    assert c1.sampling_rate == 0.0
+    c2 = SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", sampling_rate=1.0)
+    assert c2.sampling_rate == 1.0
 
     # Drift threshold limits
     with pytest.raises(ValidationError):
-        SentinelConfig(agent_id="test", drift_threshold_kl=-0.1)
+        SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", drift_threshold_kl=-0.1)
 
-    c3 = SentinelConfig(agent_id="test", drift_threshold_kl=0.0)
+    c3 = SentinelConfig(agent_id="test", owner_email="a", phoenix_endpoint="b", drift_threshold_kl=0.0)
     assert c3.drift_threshold_kl == 0.0
 
 
 def test_sentinel_config_complex_serialization() -> None:
-    trigger1 = Trigger(metric_name="latency", threshold=500, window_seconds=60)
-    trigger2 = Trigger(metric_name="cost", threshold=100, window_seconds=3600, operator=">")
+    trigger1 = CircuitBreakerTrigger(metric="latency", threshold=500, window_seconds=60)
+    trigger2 = CircuitBreakerTrigger(metric="cost", threshold=100, window_seconds=3600, operator=">")
 
     config = SentinelConfig(
         agent_id="complex-agent",
-        sample_rate=0.5,
+        owner_email="test@example.com",
+        phoenix_endpoint="http://localhost:6006",
+        sampling_rate=0.5,
         drift_threshold_kl=0.75,
-        circuit_breaker_triggers=[trigger1, trigger2],
-        notification_channels=["alert@example.com", "ops@example.com"],
+        triggers=[trigger1, trigger2],
     )
 
     # Round trip JSON
@@ -101,29 +102,21 @@ def test_sentinel_config_complex_serialization() -> None:
     restored = SentinelConfig.model_validate_json(json_str)
 
     assert restored == config
-    assert len(restored.circuit_breaker_triggers) == 2
-    assert restored.circuit_breaker_triggers[0].metric_name == "latency"
-    assert restored.circuit_breaker_triggers[1].window_seconds == 3600
-
-
-def test_alert_creation() -> None:
-    alert = Alert(message="Something went wrong", severity=AlertSeverity.CRITICAL)
-    assert alert.message == "Something went wrong"
-    assert alert.severity == AlertSeverity.CRITICAL
-    assert isinstance(alert.timestamp, datetime)
+    assert len(restored.triggers) == 2
+    assert restored.triggers[0].metric == "latency"
+    assert restored.triggers[1].window_seconds == 3600
 
 
 def test_health_report_creation() -> None:
     now = datetime.now(timezone.utc)
     report = HealthReport(
         timestamp=now,
-        agent_status="HEALTHY",
+        breaker_state="CLOSED",
         metrics={"avg_latency": "200ms"},
     )
     assert report.timestamp == now
-    assert report.agent_status == "HEALTHY"
+    assert report.breaker_state == "CLOSED"
     assert report.metrics["avg_latency"] == "200ms"
-    assert report.active_alerts == []
 
 
 def test_health_report_complex_metrics() -> None:
@@ -136,7 +129,7 @@ def test_health_report_complex_metrics() -> None:
         "is_active": True,
     }
 
-    report = HealthReport(timestamp=now, agent_status="DEGRADED", metrics=complex_metrics)
+    report = HealthReport(timestamp=now, breaker_state="CLOSED", metrics=complex_metrics)
 
     # Verify nested access
     assert report.metrics["token_usage"]["total"] == 700
@@ -148,53 +141,37 @@ def test_health_report_complex_metrics() -> None:
     # requires parsing it back.
     data = json.loads(json_str)
     assert data["metrics"]["token_usage"]["prompt"] == 500
-    assert data["agent_status"] == "DEGRADED"
-
-
-def test_health_report_with_alerts() -> None:
-    now = datetime.now(timezone.utc)
-    alert = Alert(message="High latency", severity=AlertSeverity.WARNING)
-    report = HealthReport(
-        timestamp=now,
-        agent_status="DEGRADED",
-        active_alerts=[alert],
-    )
-    assert len(report.active_alerts) == 1
-    assert report.active_alerts[0].message == "High latency"
+    assert data["breaker_state"] == "CLOSED"
 
 
 def test_health_report_status_validation() -> None:
     now = datetime.now(timezone.utc)
     with pytest.raises(ValidationError):
-        HealthReport(timestamp=now, agent_status="INVALID_STATUS")
-
-
-def test_enums() -> None:
-    assert AlertSeverity.INFO == "INFO"
+        HealthReport(timestamp=now, breaker_state="INVALID_STATUS")
 
 
 # Edge Cases & Complex Scenarios
 
 
-def test_agent_status_case_sensitivity() -> None:
+def test_breaker_state_case_sensitivity() -> None:
     now = datetime.now(timezone.utc)
     # Pydantic Literals are strict strings and case-sensitive
     with pytest.raises(ValidationError):
-        HealthReport(timestamp=now, agent_status="healthy")
+        HealthReport(timestamp=now, breaker_state="closed")
 
 
-def test_agent_status_whitespace() -> None:
+def test_breaker_state_whitespace() -> None:
     now = datetime.now(timezone.utc)
     with pytest.raises(ValidationError):
-        HealthReport(timestamp=now, agent_status=" HEALTHY")
+        HealthReport(timestamp=now, breaker_state=" CLOSED")
     with pytest.raises(ValidationError):
-        HealthReport(timestamp=now, agent_status="HEALTHY ")
+        HealthReport(timestamp=now, breaker_state="CLOSED ")
 
 
-def test_agent_status_empty_string() -> None:
+def test_breaker_state_empty_string() -> None:
     now = datetime.now(timezone.utc)
     with pytest.raises(ValidationError):
-        HealthReport(timestamp=now, agent_status="")
+        HealthReport(timestamp=now, breaker_state="")
 
 
 def test_health_report_history_bulk_serialization() -> None:
@@ -206,15 +183,15 @@ def test_health_report_history_bulk_serialization() -> None:
     base_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
     for i in range(50):
-        status = "HEALTHY"
+        state = "CLOSED"
         if i % 10 == 0:
-            status = "CRITICAL"
+            state = "OPEN"
         elif i % 5 == 0:
-            status = "DEGRADED"
+            state = "HALF_OPEN"
 
         report = HealthReport(
             timestamp=base_time,  # In real scenario timestamp would increment
-            agent_status=status,
+            breaker_state=state,
             metrics={"tick": i},
         )
         history.append(report)
@@ -227,9 +204,9 @@ def test_health_report_history_bulk_serialization() -> None:
     restored_history = [HealthReport.model_validate(d) for d in loaded_data]
 
     assert len(restored_history) == 50
-    assert restored_history[0].agent_status == "CRITICAL"  # 0 % 10 == 0
-    assert restored_history[5].agent_status == "DEGRADED"  # 5 % 5 == 0
-    assert restored_history[1].agent_status == "HEALTHY"
+    assert restored_history[0].breaker_state == "OPEN"  # 0 % 10 == 0
+    assert restored_history[5].breaker_state == "HALF_OPEN"  # 5 % 5 == 0
+    assert restored_history[1].breaker_state == "CLOSED"
     assert restored_history[49].metrics["tick"] == 49
 
 
@@ -239,19 +216,19 @@ def test_health_report_timestamp_robustness() -> None:
     that Pydantic usually supports.
     """
     # 1. Standard ISO with Z
-    json_z = '{"timestamp": "2025-01-01T12:00:00Z", "agent_status": "HEALTHY", "metrics": {}}'
+    json_z = '{"timestamp": "2025-01-01T12:00:00Z", "breaker_state": "CLOSED", "metrics": {}}'
     report_z = HealthReport.model_validate_json(json_z)
     assert report_z.timestamp.year == 2025
     assert report_z.timestamp.tzinfo == timezone.utc
 
     # 2. ISO with offset
-    json_offset = '{"timestamp": "2025-01-01T12:00:00+00:00", "agent_status": "HEALTHY", "metrics": {}}'
+    json_offset = '{"timestamp": "2025-01-01T12:00:00+00:00", "breaker_state": "CLOSED", "metrics": {}}'
     report_offset = HealthReport.model_validate_json(json_offset)
     assert report_offset.timestamp == report_z.timestamp
 
     # 3. ISO without explicit timezone (Pydantic might interpret as naive, but we should check behavior)
     # The field is just 'datetime', so it accepts naive. Best practice is to ensure UTC though.
-    json_naive = '{"timestamp": "2025-01-01T12:00:00", "agent_status": "HEALTHY", "metrics": {}}'
+    json_naive = '{"timestamp": "2025-01-01T12:00:00", "breaker_state": "CLOSED", "metrics": {}}'
     report_naive = HealthReport.model_validate_json(json_naive)
     assert report_naive.timestamp.year == 2025
     assert report_naive.timestamp.tzinfo is None

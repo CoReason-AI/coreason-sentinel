@@ -33,7 +33,7 @@ class SpotChecker:
         if not metadata:
             metadata = {}
 
-        effective_rate = self.config.sample_rate
+        effective_rate = self.config.sampling_rate
 
         for rule in self.config.conditional_sampling_rules:
             if self._evaluate_rule(rule, metadata):

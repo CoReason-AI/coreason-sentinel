@@ -16,13 +16,19 @@ from unittest.mock import MagicMock, patch
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasEvent
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 
 
 class TestTelemetryIngestor(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = SentinelConfig(agent_id="test-agent", sample_rate=1.0, circuit_breaker_triggers=[])
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            sampling_rate=1.0,
+            triggers=[],
+        )
         self.mock_cb = MagicMock(spec=CircuitBreaker)
         self.mock_sc = MagicMock(spec=SpotChecker)
         self.mock_bp = MagicMock(spec=BaselineProviderProtocol)
@@ -161,10 +167,16 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis = MagicMock(spec=Redis)
 
         # Trigger: Vector Drift > 0.5 (AVG) in 60s
-        trigger = Trigger(
-            metric_name="vector_drift", threshold=0.5, window_seconds=60, operator=">", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="vector_drift", threshold=0.5, window_seconds=60, operator=">", aggregation_method="AVG"
         )
-        config = SentinelConfig(agent_id="drift-bot", sample_rate=0.0, circuit_breaker_triggers=[trigger])
+        config = SentinelConfig(
+            agent_id="drift-bot",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            sampling_rate=0.0,
+            triggers=[trigger],
+        )
 
         real_cb = CircuitBreaker(mock_redis, config)
         mock_sc = MagicMock(spec=SpotChecker)
@@ -237,10 +249,16 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis = MagicMock(spec=Redis)
 
         # Trigger: Faithfulness < 0.5 (AVG).
-        trigger = Trigger(
-            metric_name="faithfulness_score", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="faithfulness_score", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
-        config = SentinelConfig(agent_id="storm-agent", sample_rate=1.0, circuit_breaker_triggers=[trigger])
+        config = SentinelConfig(
+            agent_id="storm-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            sampling_rate=1.0,
+            triggers=[trigger],
+        )
 
         real_cb = CircuitBreaker(mock_redis, config)
 

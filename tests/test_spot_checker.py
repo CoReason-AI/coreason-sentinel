@@ -18,18 +18,24 @@ from coreason_sentinel.spot_checker import SpotChecker
 
 class TestSpotChecker(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = SentinelConfig(agent_id="test-agent", sample_rate=0.1, circuit_breaker_triggers=[])
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            sample_rate=0.1,
+            triggers=[],
+        )
         self.mock_grader = MagicMock(spec=AssayGraderProtocol)
         self.checker = SpotChecker(self.config, self.mock_grader)
 
     def test_should_sample_always(self) -> None:
         """Test with 100% sample rate."""
-        self.config.sample_rate = 1.0
+        self.config.sampling_rate = 1.0
         self.assertTrue(self.checker.should_sample())
 
     def test_should_sample_never(self) -> None:
         """Test with 0% sample rate."""
-        self.config.sample_rate = 0.0
+        self.config.sampling_rate = 0.0
         self.assertFalse(self.checker.should_sample())
 
     def test_check_sample_success(self) -> None:

@@ -18,7 +18,7 @@ from enum import Enum
 
 from redis import Redis
 
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
 
@@ -122,8 +122,8 @@ class CircuitBreaker:
 
             # Prune old metrics to prevent memory leak
             max_window = 3600  # Default 1 hour
-            for t in self.config.circuit_breaker_triggers:
-                if t.metric_name == metric_name:
+            for t in self.config.triggers:
+                if t.metric == metric_name:
                     max_window = max(max_window, t.window_seconds)
 
             # Remove elements older than the window
@@ -148,10 +148,10 @@ class CircuitBreaker:
         now = time.time()
         violation = False
 
-        for trigger in self.config.circuit_breaker_triggers:
+        for trigger in self.config.triggers:
             if self._evaluate_trigger(trigger, now):
                 logger.warning(
-                    f"Trigger violated: {trigger.metric_name} {trigger.operator} {trigger.threshold} "
+                    f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
                     f"in last {trigger.window_seconds}s. Tripping Circuit Breaker."
                 )
                 self.set_state(CircuitBreakerState.OPEN)
@@ -165,11 +165,11 @@ class CircuitBreaker:
             logger.info(f"Circuit Breaker for {self.agent_id} recovering to CLOSED.")
             self.set_state(CircuitBreakerState.CLOSED)
 
-    def _evaluate_trigger(self, trigger: Trigger, now: float) -> bool:
+    def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
         """
         Returns True if the trigger condition is met (violation).
         """
-        key = f"sentinel:metrics:{self.agent_id}:{trigger.metric_name}"
+        key = f"sentinel:metrics:{self.agent_id}:{trigger.metric}"
         start_time = now - trigger.window_seconds
 
         try:
@@ -203,7 +203,7 @@ class CircuitBreaker:
             return False
 
         except Exception as e:
-            logger.error(f"Failed to evaluate trigger {trigger.metric_name}: {e}")
+            logger.error(f"Failed to evaluate trigger {trigger.metric}: {e}")
             return False
 
     def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:

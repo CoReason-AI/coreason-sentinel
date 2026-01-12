@@ -14,7 +14,7 @@ import pytest
 
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.interfaces import OTELSpan
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 class TestOTELSpanIngestion:
@@ -22,6 +22,8 @@ class TestOTELSpanIngestion:
     def mock_components(self) -> tuple[TelemetryIngestor, MagicMock]:
         config = SentinelConfig(
             agent_id="test-agent-otel",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
             cost_per_1k_tokens=0.01,  # $0.01 per 1k tokens
         )
         circuit_breaker = MagicMock()
@@ -175,11 +177,15 @@ class TestOTELSpanIngestion:
         # and passes it to RecordMetric, and calls CheckTriggers.
 
         # Let's verify the integration flow with a specific setup.
-        trigger = Trigger(metric_name="cost", threshold=0.05, window_seconds=60, operator=">", aggregation_method="SUM")
+        trigger = CircuitBreakerTrigger(
+            metric="cost", threshold=0.05, window_seconds=60, operator=">", aggregation_method="SUM"
+        )
         config = SentinelConfig(
             agent_id="complex-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
             cost_per_1k_tokens=0.02,  # $0.02 per 1k
-            circuit_breaker_triggers=[trigger],
+            triggers=[trigger],
         )
 
         circuit_breaker = MagicMock()

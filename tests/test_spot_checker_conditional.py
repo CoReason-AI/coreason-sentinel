@@ -16,7 +16,7 @@ def mock_grader() -> MagicMock:
 def base_config() -> SentinelConfig:
     return SentinelConfig(
         agent_id="test-agent",
-        sample_rate=0.0,  # Default to 0 to verify overrides
+            sampling_rate=0.0,  # Default to 0 to verify overrides
         phoenix_endpoint="http://localhost:6006",
         owner_email="test@example.com",
     )
@@ -29,7 +29,7 @@ def test_should_sample_default_false(base_config: SentinelConfig, mock_grader: M
 
 
 def test_should_sample_default_true(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
-    base_config.sample_rate = 1.0
+    base_config.sampling_rate = 1.0
     checker = SpotChecker(base_config, mock_grader)
     assert checker.should_sample({"some": "data"}) is True
 
