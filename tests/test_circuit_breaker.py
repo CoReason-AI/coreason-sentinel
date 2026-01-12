@@ -15,13 +15,19 @@ from unittest.mock import MagicMock, patch
 from redis import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 class TestCircuitBreakerState(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.config = SentinelConfig(agent_id="test-agent", circuit_breaker_triggers=[], recovery_timeout=60)
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[],
+            recovery_timeout=60,
+        )
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
     def test_get_state_default(self) -> None:
@@ -93,14 +99,19 @@ class TestCircuitBreakerState(unittest.TestCase):
 class TestCircuitBreakerLogic(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.trigger = Trigger(
-            metric_name="error_count",
+        self.trigger = CircuitBreakerTrigger(
+            metric="error_count",
             threshold=5,
             window_seconds=60,
             operator=">",
             aggregation_method="SUM",
         )
-        self.config = SentinelConfig(agent_id="test-agent", circuit_breaker_triggers=[self.trigger])
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[self.trigger],
+        )
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
     def test_allow_request_closed(self) -> None:
@@ -214,10 +225,10 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
     def test_sum_metric_logic(self) -> None:
         """Test that values are summed correctly (e.g. Cost)."""
-        cost_trigger = Trigger(
-            metric_name="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
+        cost_trigger = CircuitBreakerTrigger(
+            metric="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
         )
-        self.config.circuit_breaker_triggers = [cost_trigger]
+        self.config.triggers = [cost_trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
         now = time.time()
@@ -246,10 +257,10 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
     def test_operator_less_than(self) -> None:
         """Test '<' operator."""
-        trigger = Trigger(
-            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
-        self.config.circuit_breaker_triggers = [trigger]
+        self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
         now = time.time()
@@ -265,10 +276,10 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.zrangebyscore.return_value = []
         self.mock_redis.get.return_value = b"CLOSED"
 
-        trigger = Trigger(
-            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
-        self.config.circuit_breaker_triggers = [trigger]
+        self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
         self.breaker.check_triggers()
@@ -276,10 +287,10 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
     def test_aggregation_count(self) -> None:
         """Test COUNT aggregation."""
-        trigger = Trigger(
-            metric_name="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
+        trigger = CircuitBreakerTrigger(
+            metric="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
         )
-        self.config.circuit_breaker_triggers = [trigger]
+        self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
         now = time.time()
@@ -298,30 +309,34 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         # MAX > 4 -> Trip
-        trigger = Trigger(metric_name="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX")
-        self.config.circuit_breaker_triggers = [trigger]
+        trigger = CircuitBreakerTrigger(
+            metric="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX"
+        )
+        self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
         self.breaker.check_triggers()
         self.mock_redis.set.assert_called()
         self.mock_redis.set.reset_mock()
 
         # MIN < 2 -> Trip
-        trigger = Trigger(metric_name="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN")
-        self.config.circuit_breaker_triggers = [trigger]
+        trigger = CircuitBreakerTrigger(
+            metric="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN"
+        )
+        self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
         self.breaker.check_triggers()
         self.mock_redis.set.assert_called()
 
     def test_return_false_on_unknown_operator(self) -> None:
         """Test invalid operator."""
-        mock_trigger = MagicMock(spec=Trigger)
-        mock_trigger.metric_name = "test"
+        mock_trigger = MagicMock(spec=CircuitBreakerTrigger)
+        mock_trigger.metric = "test"
         mock_trigger.threshold = 10
         mock_trigger.window_seconds = 60
         mock_trigger.operator = "=="
         mock_trigger.aggregation_method = "SUM"
 
-        self.config.circuit_breaker_triggers = [mock_trigger]
+        self.config.triggers = [mock_trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
 
         now = time.time()
@@ -368,15 +383,15 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 class TestCircuitBreakerComplexScenarios(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.trigger_error = Trigger(
-            metric_name="errors",
+        self.trigger_error = CircuitBreakerTrigger(
+            metric="errors",
             threshold=5,
             window_seconds=10,
             operator=">",
             aggregation_method="SUM",
         )
-        self.trigger_latency = Trigger(
-            metric_name="latency",
+        self.trigger_latency = CircuitBreakerTrigger(
+            metric="latency",
             threshold=1000,
             window_seconds=10,
             operator=">",
@@ -384,7 +399,9 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         )
         self.config = SentinelConfig(
             agent_id="complex-agent",
-            circuit_breaker_triggers=[self.trigger_error, self.trigger_latency],
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[self.trigger_error, self.trigger_latency],
             recovery_timeout=60,
         )
         self.breaker = CircuitBreaker(self.mock_redis, self.config)
