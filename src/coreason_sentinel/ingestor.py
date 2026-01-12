@@ -15,7 +15,7 @@ from typing import Dict
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
-from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasEvent, VeritasClientProtocol
+from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasClientProtocol, VeritasEvent
 from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 from coreason_sentinel.utils.logger import logger

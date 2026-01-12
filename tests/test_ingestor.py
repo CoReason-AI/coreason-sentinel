@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Tuple, Union
 from unittest.mock import MagicMock, patch
 
-from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
+from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
-from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasEvent, VeritasClientProtocol
+from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasClientProtocol, VeritasEvent
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 

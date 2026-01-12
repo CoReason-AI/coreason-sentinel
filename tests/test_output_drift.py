@@ -83,7 +83,7 @@ class TestOutputDriftDetection:
     ) -> TelemetryIngestor:
         spot_checker = Mock()
         spot_checker.should_sample.return_value = False
-        veritas_client = Mock() # Added mock for veritas_client
+        veritas_client = Mock()  # Added mock for veritas_client
         return TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider, veritas_client)
 
     def test_compute_distribution_from_samples(self) -> None:
@@ -367,7 +367,7 @@ class TestOutputDriftDetection:
         real_cb = CircuitBreaker(mock_redis, config)
         spot_checker = Mock()
         spot_checker.should_sample.return_value = False
-        veritas_client = Mock() # Added veritas_client mock
+        veritas_client = Mock()  # Added veritas_client mock
 
         # Baseline: [0.0, 1.0, 0.0] for bins [0, 10, 20, 30]
         # This matches "Good" samples (15.0) perfectly, so KL should be ~0.
@@ -431,8 +431,10 @@ class TestOutputDriftDetection:
         mock_redis.zrevrange.return_value = [b"123:15.0:uuid"]
 
         real_cb = CircuitBreaker(mock_redis, config)
-        veritas_client = Mock() # Added mock for veritas_client
-        ingestor = TelemetryIngestor(config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client)
+        veritas_client = Mock()  # Added mock for veritas_client
+        ingestor = TelemetryIngestor(
+            config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client
+        )
 
         event = VeritasEvent(
             event_id="e1",
@@ -466,8 +468,10 @@ class TestOutputDriftDetection:
         mock_redis.zrevrange.return_value = [b"123:1000.0:uuid"]
 
         real_cb = CircuitBreaker(mock_redis, config)
-        veritas_client = Mock() # Added mock for veritas_client
-        ingestor = TelemetryIngestor(config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client)
+        veritas_client = Mock()  # Added mock for veritas_client
+        ingestor = TelemetryIngestor(
+            config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client
+        )
 
         event = VeritasEvent(
             event_id="e1",
