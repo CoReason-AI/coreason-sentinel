@@ -56,12 +56,16 @@ class TelemetryIngestor:
             self.circuit_breaker.record_metric(metric_name, value)
 
         # 2. Spot Check (Audit)
+        # Combine event metadata with derived metrics for spot checking rules
+        combined_metadata = event.metadata.copy()
+        combined_metadata.update(custom_metrics)
+
         conversation = {
             "input": event.input_text,
             "output": event.output_text,
-            "metadata": event.metadata,
+            "metadata": combined_metadata,
         }
-        if self.spot_checker.should_sample(event.metadata):
+        if self.spot_checker.should_sample(combined_metadata):
             grade = self.spot_checker.check_sample(conversation)
             if grade:
                 # If grade is low, we might want to trigger something.

@@ -12,7 +12,7 @@ import random
 from typing import Any, Dict, Optional
 
 from coreason_sentinel.interfaces import AssayGraderProtocol, GradeResult
-from coreason_sentinel.models import SentinelConfig
+from coreason_sentinel.models import ConditionalSamplingRule, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
 
@@ -28,20 +28,44 @@ class SpotChecker:
     def should_sample(self, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Determines if a request should be sampled for grading.
-        Uses random sampling based on configured sample_rate.
-        Future: Add conditional sampling based on metadata (e.g. sentiment).
+        Calculates effective sample rate based on global config and conditional rules.
         """
         if not metadata:
             metadata = {}
 
-        # 1. Check random sampling
-        if random.random() < self.config.sample_rate:
-            return True
+        effective_rate = self.config.sample_rate
 
-        # 2. Check conditional sampling (placeholder)
-        # e.g. if metadata.get("sentiment") == "negative": return True
-        # For now, we only implement random sampling as per Atomic Unit scope.
-        return False
+        for rule in self.config.conditional_sampling_rules:
+            if self._evaluate_rule(rule, metadata):
+                effective_rate = max(effective_rate, rule.sample_rate)
+                if effective_rate >= 1.0:
+                    break
+
+        return random.random() < effective_rate
+
+    def _evaluate_rule(self, rule: ConditionalSamplingRule, metadata: Dict[str, Any]) -> bool:
+        """
+        Evaluates a single conditional sampling rule against the metadata.
+        """
+        if rule.operator == "EXISTS":
+            return rule.metadata_key in metadata
+
+        if rule.metadata_key not in metadata:
+            return False
+
+        value = metadata[rule.metadata_key]
+
+        if rule.operator == "EQUALS":
+            return value == rule.value  # type: ignore[no-any-return]
+
+        if rule.operator == "CONTAINS":
+            if isinstance(value, (str, list, tuple, dict)):
+                return rule.value in value
+            # Fallback: convert to string and check?
+            # For now, if type doesn't support 'in', return False to be safe
+            return False
+
+        return False  # pragma: no cover
 
     def check_sample(self, conversation: Dict[str, Any]) -> Optional[GradeResult]:
         """

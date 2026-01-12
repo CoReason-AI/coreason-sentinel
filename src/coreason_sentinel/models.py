@@ -23,6 +23,17 @@ class Trigger(BaseModel):
     )
 
 
+class ConditionalSamplingRule(BaseModel):
+    """
+    Defines a rule for conditional sampling based on event metadata.
+    """
+
+    metadata_key: str = Field(..., description="The key in the metadata dictionary to check.")
+    operator: Literal["EQUALS", "CONTAINS", "EXISTS"] = Field(..., description="The comparison operator.")
+    value: Any = Field(None, description="The value to compare against. Ignored for EXISTS.")
+    sample_rate: float = Field(1.0, ge=0.0, le=1.0, description="The sample rate to apply if the condition is met.")
+
+
 class SentinelConfig(BaseModel):
     """
     Configuration for the Sentinel monitor.
@@ -48,6 +59,9 @@ class SentinelConfig(BaseModel):
     sentiment_regex_patterns: List[str] = Field(
         default_factory=lambda: ["STOP", "WRONG", "Bad bot"],
         description="List of regex patterns to detect negative sentiment in user input.",
+    )
+    conditional_sampling_rules: List[ConditionalSamplingRule] = Field(
+        default_factory=list, description="List of rules to override the default sampling rate based on metadata."
     )
 
 

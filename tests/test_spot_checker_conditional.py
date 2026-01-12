@@ -1,0 +1,121 @@
+import unittest.mock
+from unittest.mock import MagicMock
+
+import pytest
+
+from coreason_sentinel.models import ConditionalSamplingRule, SentinelConfig
+from coreason_sentinel.spot_checker import SpotChecker
+
+
+@pytest.fixture
+def mock_grader() -> MagicMock:
+    return MagicMock()
+
+
+@pytest.fixture
+def base_config() -> SentinelConfig:
+    return SentinelConfig(
+        agent_id="test-agent",
+        sample_rate=0.0,  # Default to 0 to verify overrides
+        phoenix_endpoint="http://localhost:6006",
+        owner_email="test@example.com",
+    )
+
+
+def test_should_sample_default_false(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    checker = SpotChecker(base_config, mock_grader)
+    # Rate is 0.0, no rules
+    assert checker.should_sample({"some": "data"}) is False
+
+
+def test_should_sample_default_true(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    base_config.sample_rate = 1.0
+    checker = SpotChecker(base_config, mock_grader)
+    assert checker.should_sample({"some": "data"}) is True
+
+
+def test_rule_equals_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    rule = ConditionalSamplingRule(metadata_key="sentiment", operator="EQUALS", value="negative", sample_rate=1.0)
+    base_config.conditional_sampling_rules = [rule]
+    checker = SpotChecker(base_config, mock_grader)
+
+    # Match
+    assert checker.should_sample({"sentiment": "negative"}) is True
+    # No match
+    assert checker.should_sample({"sentiment": "positive"}) is False
+
+
+def test_rule_contains_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    rule = ConditionalSamplingRule(metadata_key="tags", operator="CONTAINS", value="vip", sample_rate=1.0)
+    base_config.conditional_sampling_rules = [rule]
+    checker = SpotChecker(base_config, mock_grader)
+
+    # Match in list
+    assert checker.should_sample({"tags": ["user", "vip"]}) is True
+    # Match in string
+    assert checker.should_sample({"tags": "vip_user"}) is True
+    # No match
+    assert checker.should_sample({"tags": ["user"]}) is False
+    # Wrong type (int) should result in False, not error
+    assert checker.should_sample({"tags": 123}) is False
+
+
+def test_rule_exists_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    rule = ConditionalSamplingRule(metadata_key="error_trace", operator="EXISTS", sample_rate=1.0)
+    base_config.conditional_sampling_rules = [rule]
+    checker = SpotChecker(base_config, mock_grader)
+
+    assert checker.should_sample({"error_trace": "stack..."}) is True
+    assert checker.should_sample({"other": "value"}) is False
+
+
+def test_multiple_rules_precedence(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    # Rule A: 100% if "urgent"
+    # Rule B: 50% if "vip"
+    # Global: 0%
+    rule_a = ConditionalSamplingRule(metadata_key="priority", operator="EQUALS", value="urgent", sample_rate=1.0)
+    rule_b = ConditionalSamplingRule(metadata_key="user_type", operator="EQUALS", value="vip", sample_rate=0.5)
+
+    base_config.conditional_sampling_rules = [rule_a, rule_b]
+    checker = SpotChecker(base_config, mock_grader)
+
+    # Only Urgent (100%)
+    assert checker.should_sample({"priority": "urgent"}) is True
+
+    # Only VIP (50%) - mock random to test
+    # If we set random to 0.6, it should be False (0.6 > 0.5)
+    # If we set random to 0.4, it should be True (0.4 < 0.5)
+
+    # We rely on statistical testing or patching random
+    # Let's patch random for deterministic behavior
+    with unittest.mock.patch("random.random", return_value=0.4):
+        assert checker.should_sample({"user_type": "vip"}) is True
+
+    with unittest.mock.patch("random.random", return_value=0.6):
+        assert checker.should_sample({"user_type": "vip"}) is False
+
+    # Both match: Max(1.0, 0.5) = 1.0. random=0.9 should pass.
+    with unittest.mock.patch("random.random", return_value=0.9):
+        assert checker.should_sample({"priority": "urgent", "user_type": "vip"}) is True
+
+
+def test_missing_metadata_handling(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    rule = ConditionalSamplingRule(metadata_key="missing", operator="EQUALS", value="value", sample_rate=1.0)
+    base_config.conditional_sampling_rules = [rule]
+    checker = SpotChecker(base_config, mock_grader)
+
+    # Metadata None
+    assert checker.should_sample(None) is False
+    # Metadata missing key
+    assert checker.should_sample({}) is False
+
+
+def test_rule_matches_derived_metric(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+    # Simulate the integration scenario where Ingestor adds "refusal_count"
+    rule = ConditionalSamplingRule(metadata_key="refusal_count", operator="EXISTS", sample_rate=1.0)
+    base_config.conditional_sampling_rules = [rule]
+    checker = SpotChecker(base_config, mock_grader)
+
+    # Metadata from ingestor
+    metadata = {"refusal_count": 1.0, "other": "info"}
+    assert checker.should_sample(metadata) is True
