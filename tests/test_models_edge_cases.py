@@ -29,7 +29,7 @@ class TestModelsEdgeCases(unittest.TestCase):
         """
         # Case 1: SentinelConfig - sample_rate (old) vs sampling_rate (new)
         with self.assertRaises(ValidationError) as cm:
-            SentinelConfig(
+            SentinelConfig(  # type: ignore[call-arg]
                 agent_id="test",
                 owner_email="admin@example.com",
                 phoenix_endpoint="http://localhost",
@@ -40,7 +40,7 @@ class TestModelsEdgeCases(unittest.TestCase):
 
         # Case 2: CircuitBreakerTrigger - metric_name (old) vs metric (new)
         with self.assertRaises(ValidationError) as cm:
-            CircuitBreakerTrigger(
+            CircuitBreakerTrigger(  # type: ignore[call-arg]
                 metric_name="errors",  # OLD NAME
                 threshold=1,
                 window_seconds=60,
@@ -49,7 +49,7 @@ class TestModelsEdgeCases(unittest.TestCase):
 
         # Case 3: HealthReport - agent_status (old) vs breaker_state (new)
         with self.assertRaises(ValidationError) as cm:
-            HealthReport(
+            HealthReport(  # type: ignore[call-arg]
                 timestamp=datetime.now(timezone.utc),
                 agent_status="CLOSED",  # OLD NAME
             )
@@ -60,7 +60,7 @@ class TestModelsEdgeCases(unittest.TestCase):
         Verify that unknown fields are rejected.
         """
         with self.assertRaises(ValidationError):
-            SentinelConfig(
+            SentinelConfig(  # type: ignore[call-arg]
                 agent_id="test",
                 owner_email="a",
                 phoenix_endpoint="b",
@@ -73,7 +73,7 @@ class TestModelsEdgeCases(unittest.TestCase):
         """
         # Missing owner_email
         with self.assertRaises(ValidationError) as cm:
-            SentinelConfig(
+            SentinelConfig(  # type: ignore[call-arg]
                 agent_id="test",
                 phoenix_endpoint="http://localhost",
             )
@@ -81,7 +81,7 @@ class TestModelsEdgeCases(unittest.TestCase):
 
         # Missing phoenix_endpoint
         with self.assertRaises(ValidationError) as cm:
-            SentinelConfig(
+            SentinelConfig(  # type: ignore[call-arg]
                 agent_id="test",
                 owner_email="a",
             )
@@ -97,9 +97,7 @@ class TestModelsEdgeCases(unittest.TestCase):
         )
 
         rule1 = ConditionalSamplingRule(metadata_key="vip", operator="EXISTS", sample_rate=1.0)
-        rule2 = ConditionalSamplingRule(
-            metadata_key="tier", operator="EQUALS", value="free", sample_rate=0.01
-        )
+        rule2 = ConditionalSamplingRule(metadata_key="tier", operator="EQUALS", value="free", sample_rate=0.01)
 
         config = SentinelConfig(
             agent_id="complex-agent",
@@ -142,10 +140,6 @@ class TestModelsEdgeCases(unittest.TestCase):
         Verify bounds for sampling rate.
         """
         with self.assertRaises(ValidationError):
-            SentinelConfig(
-                agent_id="a", owner_email="b", phoenix_endpoint="c", sampling_rate=-0.1
-            )
+            SentinelConfig(agent_id="a", owner_email="b", phoenix_endpoint="c", sampling_rate=-0.1)
         with self.assertRaises(ValidationError):
-            SentinelConfig(
-                agent_id="a", owner_email="b", phoenix_endpoint="c", sampling_rate=1.1
-            )
+            SentinelConfig(agent_id="a", owner_email="b", phoenix_endpoint="c", sampling_rate=1.1)

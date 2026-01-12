@@ -1,5 +1,4 @@
 from datetime import datetime
-from enum import Enum
 from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -81,13 +80,15 @@ class HealthReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timestamp: datetime = Field(..., description="Time of the report.")
-    breaker_state: Literal["CLOSED", "OPEN", "HALF_OPEN"] = Field(..., description="Current state of the Circuit Breaker.")
+    breaker_state: Literal["CLOSED", "OPEN", "HALF_OPEN"] = Field(
+        ..., description="Current state of the Circuit Breaker."
+    )
     metrics: Dict[str, Any] = Field(
         default_factory=lambda: {
             "avg_latency": "400ms",
             "faithfulness": 0.95,
             "cost_per_query": 0.02,
-            "kl_divergence": 0.1
+            "kl_divergence": 0.1,
         },
         description="Key-value pairs of current metrics.",
     )

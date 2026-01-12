@@ -16,7 +16,7 @@ def mock_grader() -> MagicMock:
 def base_config() -> SentinelConfig:
     return SentinelConfig(
         agent_id="test-agent",
-            sampling_rate=0.0,  # Default to 0 to verify overrides
+        sampling_rate=0.0,  # Default to 0 to verify overrides
         phoenix_endpoint="http://localhost:6006",
         owner_email="test@example.com",
     )

@@ -5,9 +5,9 @@ import pytest
 from pydantic import ValidationError
 
 from coreason_sentinel.models import (
+    CircuitBreakerTrigger,
     HealthReport,
     SentinelConfig,
-    CircuitBreakerTrigger,
 )
 
 
@@ -38,7 +38,9 @@ def test_trigger_edge_cases() -> None:
 
 
 def test_sentinel_config_defaults() -> None:
-    config = SentinelConfig(agent_id="test-agent", owner_email="test@example.com", phoenix_endpoint="http://localhost:6006")
+    config = SentinelConfig(
+        agent_id="test-agent", owner_email="test@example.com", phoenix_endpoint="http://localhost:6006"
+    )
     assert config.agent_id == "test-agent"
     assert config.owner_email == "test@example.com"
     assert config.phoenix_endpoint == "http://localhost:6006"
