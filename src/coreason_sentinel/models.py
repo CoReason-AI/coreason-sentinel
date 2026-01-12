@@ -47,6 +47,9 @@ class SentinelConfig(BaseModel):
     drift_sample_window: int = Field(
         100, gt=0, description="Number of recent samples to use for live distribution calculation."
     )
+    cost_per_1k_tokens: float = Field(
+        0.002, ge=0.0, description="Cost per 1000 tokens in USD. Default is 0.002 (approx GPT-3.5)."
+    )
     recovery_timeout: int = Field(
         60, gt=0, description="Cooldown time in seconds before attempting recovery from OPEN state."
     )
