@@ -10,11 +10,12 @@
 
 
 import re
+from datetime import datetime
 from typing import Dict
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
-from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasEvent
+from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasClientProtocol, VeritasEvent
 from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 from coreason_sentinel.utils.logger import logger
@@ -32,11 +33,13 @@ class TelemetryIngestor:
         circuit_breaker: CircuitBreaker,
         spot_checker: SpotChecker,
         baseline_provider: BaselineProviderProtocol,
+        veritas_client: VeritasClientProtocol,
     ):
         self.config = config
         self.circuit_breaker = circuit_breaker
         self.spot_checker = spot_checker
         self.baseline_provider = baseline_provider
+        self.veritas_client = veritas_client
 
     def process_otel_span(self, span: OTELSpan) -> None:
         """
@@ -80,6 +83,32 @@ class TelemetryIngestor:
 
         # 4. Check Triggers
         self.circuit_breaker.check_triggers()
+
+    def ingest_from_veritas_since(self, since: datetime) -> int:
+        """
+        Polls Veritas for logs since the given timestamp and processes them.
+        Returns the number of events processed.
+        """
+        try:
+            events = self.veritas_client.fetch_logs(self.config.agent_id, since)
+        except Exception as e:
+            logger.error(f"Failed to fetch logs from Veritas: {e}")
+            return 0
+
+        if not events:
+            return 0
+
+        count = 0
+        for event in events:
+            try:
+                self.process_event(event)
+                count += 1
+            except Exception as e:
+                logger.error(f"Failed to process event {event.event_id}: {e}")
+                # Continue processing other events
+                continue
+
+        return count
 
     def process_event(self, event: VeritasEvent) -> None:
         """
