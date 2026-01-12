@@ -55,15 +55,19 @@ class TelemetryIngestor:
         token_count = 0.0
         attributes = span.attributes or {}
 
-        # "llm.token_count.total" (OpenLLMetry / common convention)
-        if "llm.token_count.total" in attributes:
-            token_count = float(attributes["llm.token_count.total"])
-        # "gen_ai.usage.total_tokens" (OTEL Semantic Conventions for GenAI)
-        elif "gen_ai.usage.total_tokens" in attributes:
-            token_count = float(attributes["gen_ai.usage.total_tokens"])
-        # "llm.usage.total_tokens" (Another variant)
-        elif "llm.usage.total_tokens" in attributes:
-            token_count = float(attributes["llm.usage.total_tokens"])
+        try:
+            # "llm.token_count.total" (OpenLLMetry / common convention)
+            if "llm.token_count.total" in attributes:
+                token_count = float(attributes["llm.token_count.total"])
+            # "gen_ai.usage.total_tokens" (OTEL Semantic Conventions for GenAI)
+            elif "gen_ai.usage.total_tokens" in attributes:
+                token_count = float(attributes["gen_ai.usage.total_tokens"])
+            # "llm.usage.total_tokens" (Another variant)
+            elif "llm.usage.total_tokens" in attributes:
+                token_count = float(attributes["llm.usage.total_tokens"])
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse token count from span attributes: {e}")
+            token_count = 0.0
 
         if token_count > 0:
             self.circuit_breaker.record_metric("token_count", token_count)
