@@ -78,9 +78,14 @@ class CircuitBreaker:
         Explicitly sets the circuit breaker state.
         """
         try:
-            self.redis.set(self._state_key, state.value)
+            # Atomic set and get old value
+            old_state_bytes = self.redis.getset(self._state_key, state.value)
 
-            if state == CircuitBreakerState.OPEN:
+            # Determine if we are effectively transitioning to OPEN
+            # We treat None (missing key) as CLOSED.
+            was_open = old_state_bytes is not None and old_state_bytes.decode("utf-8") == CircuitBreakerState.OPEN.value
+
+            if state == CircuitBreakerState.OPEN and not was_open:
                 # Set cooldown
                 self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
                 # Send Critical Alert

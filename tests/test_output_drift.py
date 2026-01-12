@@ -421,11 +421,14 @@ class TestOutputDriftDetection:
         # ...
         # 5th bad event: Window [25, 25, 25, 25, 25] -> High drift (All in Bin 2, Baseline expects 10% there)
 
+        # Mock getset return value
+        mock_redis.getset.return_value = b"CLOSED"
+
         for _ in range(5):
             ingestor.process_event(bad_event)
 
         # Verify TRIP
-        mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        mock_redis.getset.assert_any_call("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_sparse_data_distribution(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
         """

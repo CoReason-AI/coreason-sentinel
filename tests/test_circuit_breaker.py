@@ -54,28 +54,82 @@ class TestCircuitBreakerState(unittest.TestCase):
     def test_set_state(self) -> None:
         """Test transitioning state."""
         self.breaker.set_state(CircuitBreakerState.HALF_OPEN)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
 
     def test_set_state_open_sets_cooldown(self) -> None:
         """Test that setting OPEN sets the cooldown key."""
+        # Mock old state as CLOSED (so we trip)
+        self.mock_redis.getset.return_value = b"CLOSED"
+
         self.breaker.set_state(CircuitBreakerState.OPEN)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        # Check that getset was used
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
         self.mock_redis.setex.assert_called_with("sentinel:breaker:test-agent:cooldown", 60, "1")
 
     def test_set_state_open_sends_alert(self) -> None:
         """Test that setting OPEN sends a critical alert."""
+        # Mock old state as CLOSED
+        self.mock_redis.getset.return_value = b"CLOSED"
         reason = "Manual Trip"
         self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
         self.mock_notification_service.send_critical_alert.assert_called_once_with(
             email="test@example.com", agent_id="test-agent", reason=reason
         )
 
+    def test_idempotent_open_alert(self) -> None:
+        """
+        Test that setting OPEN when ALREADY OPEN does NOT send another alert.
+        """
+        # Mock old state as OPEN
+        self.mock_redis.getset.return_value = b"OPEN"
+        reason = "Manual Trip"
+        self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
+
+        # Should NOT alert
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+        # Should NOT reset cooldown
+        self.mock_redis.setex.assert_not_called()
+
     def test_set_state_open_alert_failure(self) -> None:
         """Test that alert failure doesn't crash the breaker."""
+        self.mock_redis.getset.return_value = b"CLOSED"
         self.mock_notification_service.send_critical_alert.side_effect = Exception("Email Down")
         self.breaker.set_state(CircuitBreakerState.OPEN)
         # Should proceed to log but not crash
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        # Since we use getset, no explicit set call is made unless failure happens before?
+        # No, getset does the set.
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+
+    def test_missing_email_config(self) -> None:
+        """Test that no alert is sent if owner_email is missing."""
+        self.config.owner_email = ""
+        self.mock_redis.getset.return_value = b"CLOSED"
+
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+
+    def test_flapping_cycle_alerts(self) -> None:
+        """
+        Test that flapping (Open -> Closed -> Open) sends 2 alerts.
+        """
+        # 1. First Trip
+        self.mock_redis.getset.return_value = b"CLOSED"
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        self.assertEqual(self.mock_notification_service.send_critical_alert.call_count, 1)
+
+        # 2. Reset mock
+        self.mock_notification_service.reset_mock()
+
+        # 3. Recovery to CLOSED (getset returns OPEN)
+        self.mock_redis.getset.return_value = b"OPEN"
+        self.breaker.set_state(CircuitBreakerState.CLOSED)
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+
+        # 4. Second Trip (getset returns CLOSED)
+        self.mock_redis.getset.return_value = b"CLOSED"
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        self.assertEqual(self.mock_notification_service.send_critical_alert.call_count, 1)
 
     def test_get_state_auto_recovery_from_open(self) -> None:
         """Test OPEN -> HALF_OPEN transition when cooldown expires."""
@@ -87,7 +141,7 @@ class TestCircuitBreakerState(unittest.TestCase):
 
         # Should transition to HALF_OPEN
         self.assertEqual(state, CircuitBreakerState.HALF_OPEN)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
 
     def test_get_state_open_waiting_for_cooldown(self) -> None:
         """Test OPEN state persists if cooldown exists."""
@@ -102,7 +156,7 @@ class TestCircuitBreakerState(unittest.TestCase):
 
     def test_set_state_redis_exception(self) -> None:
         """Test exception handling in set_state."""
-        self.mock_redis.set.side_effect = Exception("Connection Error")
+        self.mock_redis.getset.side_effect = Exception("Connection Error")
         with self.assertRaises(Exception):  # noqa: B017
             self.breaker.set_state(CircuitBreakerState.OPEN)
 
@@ -158,7 +212,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.breaker.check_triggers()
 
         # Should set CLOSED
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "CLOSED")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "CLOSED")
 
     def test_check_triggers_half_open_failure(self) -> None:
         """Test HALF_OPEN -> OPEN if violation."""
@@ -171,7 +225,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.breaker.check_triggers()
 
         # Should set OPEN (and reset cooldown)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
         # Ensure cooldown set
         self.mock_redis.setex.assert_called()
 
@@ -214,7 +268,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_evaluate_trigger_already_open(self) -> None:
         """Test that checks are skipped if breaker is already OPEN."""
@@ -255,7 +309,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_bad_member_format(self) -> None:
         """Test resilience against malformed Redis data."""
@@ -287,7 +341,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_evaluate_empty_events(self) -> None:
         """Test trigger evaluation when no events exist in window."""
@@ -317,7 +371,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_aggregation_min_max(self) -> None:
         """Test MIN and MAX aggregation."""
@@ -333,8 +387,8 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called()
-        self.mock_redis.set.reset_mock()
+        self.mock_redis.getset.assert_called()
+        self.mock_redis.getset.reset_mock()
 
         # MIN < 2 -> Trip
         trigger = CircuitBreakerTrigger(
@@ -343,7 +397,7 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.config.triggers = [trigger]
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called()
+        self.mock_redis.getset.assert_called()
 
     def test_return_false_on_unknown_operator(self) -> None:
         """Test invalid operator."""
@@ -434,7 +488,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         self.mock_redis.get.return_value = b"OPEN"
         self.mock_redis.exists.return_value = 0  # Cooldown expired
         # set_state will be called. Make it fail.
-        self.mock_redis.set.side_effect = Exception("Redis Write Failed")
+        self.mock_redis.getset.side_effect = Exception("Redis Write Failed")
 
         # The get_state method catches exception from set_state (via self.set_state) or internal block?
         # get_state calls set_state. set_state re-raises exception?
@@ -457,7 +511,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         state = self.breaker.get_state()
         self.assertEqual(state, CircuitBreakerState.HALF_OPEN)
         # Verify set_state called
-        self.mock_redis.set.assert_called_with("sentinel:breaker:complex-agent:state", "HALF_OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "HALF_OPEN")
 
         # 3. Simulate Healthy Traffic
         # In HALF_OPEN, we check triggers.
@@ -471,7 +525,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         self.breaker.check_triggers()
 
         # 5. Should transition to CLOSED
-        self.mock_redis.set.assert_called_with("sentinel:breaker:complex-agent:state", "CLOSED")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "CLOSED")
 
     def test_relapse_cycle(self) -> None:
         """
@@ -489,7 +543,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         self.breaker.check_triggers()
 
         # 4. Should transition back to OPEN
-        self.mock_redis.set.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
         # And reset cooldown
         self.mock_redis.setex.assert_called_with("sentinel:breaker:complex-agent:cooldown", 60, "1")
 
@@ -515,7 +569,7 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
 
     def test_multi_trigger_second_violation(self) -> None:
         """
@@ -535,4 +589,4 @@ class TestCircuitBreakerComplexScenarios(unittest.TestCase):
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")

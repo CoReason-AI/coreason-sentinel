@@ -339,6 +339,9 @@ class TestTelemetryIngestor(unittest.TestCase):
             metadata={"embedding": [0.0, 1.0]},
         )
 
+        # Mock getset to return CLOSED so the breaker actually trips
+        mock_redis.getset.return_value = b"CLOSED"
+
         for _ in range(3):
             ingestor.process_event(event)
 
@@ -347,7 +350,7 @@ class TestTelemetryIngestor(unittest.TestCase):
         # Threshold: 0.5.
         # 1.0 > 0.5 -> Trip.
 
-        mock_redis.set.assert_called_with("sentinel:breaker:drift-bot:state", "OPEN")
+        mock_redis.getset.assert_any_call("sentinel:breaker:drift-bot:state", "OPEN")
 
     def test_hallucination_storm_scenario(self) -> None:
         """
@@ -420,6 +423,9 @@ class TestTelemetryIngestor(unittest.TestCase):
         # Grader returns 0.1 (Low faithfulness).
         mock_grader.grade_conversation.return_value = GradeResult(faithfulness_score=0.1, safety_score=1.0, details={})
 
+        # Mock getset to return CLOSED so the breaker actually trips
+        mock_redis.getset.return_value = b"CLOSED"
+
         # Send 5 events.
         # faithfulness_score accumulator: 0.1, 0.1, ...
         # AVG will be 0.1.
@@ -429,7 +435,7 @@ class TestTelemetryIngestor(unittest.TestCase):
             ingestor.process_event(self.event)
 
         # Verify set_state("OPEN") was called.
-        mock_redis.set.assert_called_with("sentinel:breaker:storm-agent:state", "OPEN")
+        mock_redis.getset.assert_any_call("sentinel:breaker:storm-agent:state", "OPEN")
 
     def test_output_drift_missing_methods(self) -> None:
         """Test graceful handling when provider is missing distribution methods."""
