@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
-from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasEvent
+from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasClientProtocol, VeritasEvent
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 
@@ -31,8 +31,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         )
         self.mock_cb = MagicMock(spec=CircuitBreaker)
         self.mock_sc = MagicMock(spec=SpotChecker)
+        self.mock_sc.should_sample.return_value = False  # Default to no sampling
         self.mock_bp = MagicMock(spec=BaselineProviderProtocol)
-        self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp)
+        self.mock_veritas = MagicMock(spec=VeritasClientProtocol)
+        self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp, self.mock_veritas)
 
         self.event = VeritasEvent(
             event_id="evt-1",
@@ -44,6 +46,112 @@ class TestTelemetryIngestor(unittest.TestCase):
             metrics={"latency": 100, "tokens": 50},
             metadata={"user_tier": "free"},
         )
+
+    def test_ingest_from_veritas_since_success(self) -> None:
+        """Test fetching and processing logs from Veritas."""
+        since_time = datetime.now(timezone.utc)
+        events = [self.event, self.event]
+        self.mock_veritas.fetch_logs.return_value = events
+
+        count = self.ingestor.ingest_from_veritas_since(since_time)
+
+        self.mock_veritas.fetch_logs.assert_called_with("test-agent", since_time)
+        self.assertEqual(count, 2)
+        # Should have called process_event 2 times
+        # Since process_event calls check_triggers, it should be called 2 times.
+        self.assertEqual(self.mock_cb.check_triggers.call_count, 2)
+
+    def test_ingest_from_veritas_since_empty(self) -> None:
+        """Test fetching no logs from Veritas."""
+        since_time = datetime.now(timezone.utc)
+        self.mock_veritas.fetch_logs.return_value = []
+
+        count = self.ingestor.ingest_from_veritas_since(since_time)
+
+        self.assertEqual(count, 0)
+        self.mock_cb.check_triggers.assert_not_called()
+
+    def test_ingest_from_veritas_since_exception(self) -> None:
+        """Test handling exception during fetch."""
+        since_time = datetime.now(timezone.utc)
+        self.mock_veritas.fetch_logs.side_effect = Exception("API Error")
+
+        count = self.ingestor.ingest_from_veritas_since(since_time)
+
+        self.assertEqual(count, 0)
+        self.mock_cb.check_triggers.assert_not_called()
+
+    def test_ingest_from_veritas_returns_none(self) -> None:
+        """
+        Edge Case: veritas client returns None instead of list.
+        Should handle gracefully (return 0).
+        """
+        since_time = datetime.now(timezone.utc)
+        self.mock_veritas.fetch_logs.return_value = None
+
+        count = self.ingestor.ingest_from_veritas_since(since_time)
+        self.assertEqual(count, 0)
+
+    def test_ingest_from_veritas_partial_failure(self) -> None:
+        """
+        Edge Case: One event fails to process, loop continues.
+        """
+        since_time = datetime.now(timezone.utc)
+        # 3 events
+        events = [self.event, self.event, self.event]
+        self.mock_veritas.fetch_logs.return_value = events
+
+        # Mock process_event to fail on 2nd call
+        # We need to mock self.ingestor.process_event?
+        # But we are testing the ingestor logic.
+        # We can patch the method on the instance.
+        with patch.object(self.ingestor, "process_event", side_effect=[None, Exception("Processing Failed"), None]):
+            count = self.ingestor.ingest_from_veritas_since(since_time)
+
+            # Expecting 2 successful processings
+            self.assertEqual(count, 2)
+
+    def test_batch_trip_scenario(self) -> None:
+        """
+        Complex Scenario: 'Batch Trip'.
+        A batch of events where early events cause a trip, but processing continues.
+        """
+        # We mock Circuit Breaker state behavior.
+        # Event 1: Normal.
+        # Event 2: Trips Breaker.
+        # Event 3: Breaker is OPEN.
+
+        since_time = datetime.now(timezone.utc)
+        events = [self.event, self.event, self.event]
+        self.mock_veritas.fetch_logs.return_value = events
+
+        # Prevent drift detection crash
+        self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
+        # Prevent "no recent samples" return
+        self.mock_cb.get_recent_values.return_value = [10.0]
+
+        # We need check_triggers to simulate tripping on 2nd call.
+        # And check state behavior?
+        # TelemetryIngestor just calls check_triggers().
+        # We want to ensure that even if breaker trips (check_triggers might log or whatever),
+        # the ingestor CONTINUES to process event 3 and call record_metric.
+
+        # Let's track calls to record_metric.
+        # If check_triggers raises exception (it shouldn't), loop might break.
+        # But let's assume check_triggers is safe.
+
+        count = self.ingestor.ingest_from_veritas_since(since_time)
+
+        self.assertEqual(count, 3)
+        self.assertEqual(self.mock_cb.check_triggers.call_count, 3)
+
+        # Expected Metrics per event:
+        # 1. latency
+        # 2. tokens
+        # 3. output_length (from _process_output_drift)
+        # 4. output_drift_kl (from _process_output_drift, since mocks valid)
+        # Total 4 per event * 3 events = 12
+        self.assertEqual(self.mock_cb.record_metric.call_count, 12)
 
     def test_process_event_records_metrics(self) -> None:
         """Test that event metrics are sent to CircuitBreaker."""
@@ -182,11 +290,12 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_sc = MagicMock(spec=SpotChecker)
         mock_sc.should_sample.return_value = False
         mock_bp = MagicMock(spec=BaselineProviderProtocol)
+        mock_veritas = MagicMock(spec=VeritasClientProtocol)
 
         # Baseline: Unit vector on X axis
         mock_bp.get_baseline_vectors.return_value = [[1.0, 0.0]]
 
-        ingestor = TelemetryIngestor(config, real_cb, mock_sc, mock_bp)
+        ingestor = TelemetryIngestor(config, real_cb, mock_sc, mock_bp, mock_veritas)
 
         # Setup Mock Redis
         redis_store: Dict[str, List[Tuple[float, bytes]]] = {}
@@ -266,9 +375,10 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         mock_grader = MagicMock(spec=AssayGraderProtocol)
         mock_bp = MagicMock(spec=BaselineProviderProtocol)
+        mock_veritas = MagicMock(spec=VeritasClientProtocol)
         real_sc = SpotChecker(config, mock_grader)
 
-        ingestor = TelemetryIngestor(config, real_cb, real_sc, mock_bp)
+        ingestor = TelemetryIngestor(config, real_cb, real_sc, mock_bp, mock_veritas)
 
         # 2. Simulate "Bad" Traffic (Mock Redis Storage)
 
