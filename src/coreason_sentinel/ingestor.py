@@ -14,7 +14,7 @@ from typing import Dict
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
-from coreason_sentinel.interfaces import BaselineProviderProtocol, VeritasEvent
+from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasEvent
 from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 from coreason_sentinel.utils.logger import logger
@@ -37,6 +37,49 @@ class TelemetryIngestor:
         self.circuit_breaker = circuit_breaker
         self.spot_checker = spot_checker
         self.baseline_provider = baseline_provider
+
+    def process_otel_span(self, span: OTELSpan) -> None:
+        """
+        Processes a single OpenTelemetry Span.
+        Extracts Latency, Tokens, and Cost for Circuit Breaker monitoring.
+        """
+        logger.info(f"Processing OTEL Span {span.span_id} - {span.name}")
+
+        # 1. Calculate Latency (seconds)
+        if span.end_time_unix_nano > span.start_time_unix_nano:
+            latency_sec = (span.end_time_unix_nano - span.start_time_unix_nano) / 1e9
+            self.circuit_breaker.record_metric("latency", latency_sec)
+
+        # 2. Extract Token Counts
+        # Try standard semantic conventions
+        token_count = 0.0
+        attributes = span.attributes or {}
+
+        try:
+            # "llm.token_count.total" (OpenLLMetry / common convention)
+            if "llm.token_count.total" in attributes:
+                token_count = float(attributes["llm.token_count.total"])
+            # "gen_ai.usage.total_tokens" (OTEL Semantic Conventions for GenAI)
+            elif "gen_ai.usage.total_tokens" in attributes:
+                token_count = float(attributes["gen_ai.usage.total_tokens"])
+            # "llm.usage.total_tokens" (Another variant)
+            elif "llm.usage.total_tokens" in attributes:
+                token_count = float(attributes["llm.usage.total_tokens"])
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse token count from span attributes: {e}")
+            token_count = 0.0
+
+        if token_count > 0:
+            self.circuit_breaker.record_metric("token_count", token_count)
+
+            # 3. Calculate Cost
+            # Cost = (Tokens / 1000) * CostPer1k
+            if self.config.cost_per_1k_tokens > 0:
+                cost = (token_count / 1000.0) * self.config.cost_per_1k_tokens
+                self.circuit_breaker.record_metric("cost", cost)
+
+        # 4. Check Triggers
+        self.circuit_breaker.check_triggers()
 
     def process_event(self, event: VeritasEvent) -> None:
         """
