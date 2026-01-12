@@ -144,6 +144,7 @@ def test_complex_rule_interaction_intermediate_rates(base_config: SentinelConfig
     with unittest.mock.patch("random.random", return_value=0.81):
         assert checker.should_sample(metadata) is False
 
+
 def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
     # EQUALS None
     rule_none = ConditionalSamplingRule(metadata_key="data", operator="EQUALS", value=None, sample_rate=1.0)
@@ -167,6 +168,7 @@ def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock) ->
     checker = SpotChecker(base_config, mock_grader)
 
     assert checker.should_sample({"tags": None}) is False
+
 
 def test_case_sensitivity(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
     rule = ConditionalSamplingRule(metadata_key="status", operator="EQUALS", value="ERROR", sample_rate=1.0)
