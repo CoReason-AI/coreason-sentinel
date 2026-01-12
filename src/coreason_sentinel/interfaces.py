@@ -9,9 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 from datetime import datetime
-from typing import Any, Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VeritasEvent(BaseModel):
@@ -28,6 +28,22 @@ class VeritasEvent(BaseModel):
     output_text: str
     metrics: Dict[str, Any]  # e.g., latency, token_usage
     metadata: Dict[str, Any]
+
+
+class OTELSpan(BaseModel):
+    """
+    Represents an OpenTelemetry Span for ingestion.
+    Simplified model focusing on fields relevant for Sentinel analysis.
+    """
+
+    trace_id: str = Field(..., description="Unique 32-hex-character identifier for the trace.")
+    span_id: str = Field(..., description="Unique 16-hex-character identifier for the span.")
+    name: str = Field(..., description="Name of the operation (e.g., 'query_llm').")
+    start_time_unix_nano: int = Field(..., description="Start time in nanoseconds since epoch.")
+    end_time_unix_nano: int = Field(..., description="End time in nanoseconds since epoch.")
+    attributes: Dict[str, Any] = Field(default_factory=dict, description="Key-value pairs of span attributes.")
+    status_code: str = Field("UNSET", description="Status code (UNSET, OK, ERROR).")
+    status_message: Optional[str] = Field(None, description="Status description if error.")
 
 
 class GradeResult(BaseModel):
