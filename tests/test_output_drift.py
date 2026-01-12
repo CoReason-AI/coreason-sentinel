@@ -18,7 +18,7 @@ from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.interfaces import BaselineProviderProtocol, VeritasEvent
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 class TestOutputDriftDetection:
@@ -26,10 +26,12 @@ class TestOutputDriftDetection:
     def config(self) -> SentinelConfig:
         return SentinelConfig(
             agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
             drift_sample_window=10,
-            circuit_breaker_triggers=[
-                Trigger(
-                    metric_name="output_drift_kl",
+            triggers=[
+                CircuitBreakerTrigger(
+                    metric="output_drift_kl",
                     threshold=0.5,
                     window_seconds=60,
                     operator=">",
