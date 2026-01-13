@@ -167,6 +167,22 @@ class TelemetryIngestor:
         except Exception as e:
             logger.error(f"Failed to process output drift detection: {e}")
 
+        # 5. Drift Detection (Relevance - Query vs Response)
+        query_embedding = event.metadata.get("query_embedding")
+        response_embedding = event.metadata.get("response_embedding")
+
+        if (
+            query_embedding
+            and isinstance(query_embedding, list)
+            and response_embedding
+            and isinstance(response_embedding, list)
+        ):
+            try:
+                relevance_drift = DriftEngine.compute_relevance_drift(query_embedding, response_embedding)
+                self.circuit_breaker.record_metric("relevance_drift", relevance_drift)
+            except Exception as e:
+                logger.error(f"Failed to process relevance drift detection: {e}")
+
         # Final trigger check after all metrics
         self.circuit_breaker.check_triggers()
 
