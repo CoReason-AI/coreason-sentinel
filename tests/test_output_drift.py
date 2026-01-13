@@ -53,7 +53,10 @@ class TestOutputDriftDetection:
 
     @pytest.fixture
     def circuit_breaker(self, mock_redis: MagicMock, config: SentinelConfig) -> CircuitBreaker:
-        cb = CircuitBreaker(mock_redis, config)
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+        cb = CircuitBreaker(mock_redis, config, mock_notification_service)
         # Mock check_triggers to avoid redis calls in unit test if desired,
         # but we want to test interaction.
         # We will mock get_recent_values instead of the redis call inside it for simplicity
@@ -315,7 +318,10 @@ class TestOutputDriftDetection:
         # 1. Setup Logic with Functional Mocks
         from typing import Dict, List, Tuple, Union
 
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
         mock_redis = MagicMock()
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         redis_store: Dict[str, List[Tuple[float, bytes]]] = {}
 
         def mock_zadd(key: str, mapping: Dict[Union[str, bytes], float]) -> None:
@@ -364,7 +370,7 @@ class TestOutputDriftDetection:
         config.drift_sample_window = 5
         # Trigger: output_drift_kl > 0.5
 
-        real_cb = CircuitBreaker(mock_redis, config)
+        real_cb = CircuitBreaker(mock_redis, config, mock_notification_service)
         spot_checker = Mock()
         spot_checker.should_sample.return_value = False
         veritas_client = Mock()  # Added veritas_client mock
@@ -415,11 +421,14 @@ class TestOutputDriftDetection:
         # ...
         # 5th bad event: Window [25, 25, 25, 25, 25] -> High drift (All in Bin 2, Baseline expects 10% there)
 
+        # Mock getset return value
+        mock_redis.getset.return_value = b"CLOSED"
+
         for _ in range(5):
             ingestor.process_event(bad_event)
 
         # Verify TRIP
-        mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        mock_redis.getset.assert_any_call("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_sparse_data_distribution(self, config: SentinelConfig, baseline_provider: MagicMock) -> None:
         """
@@ -430,7 +439,11 @@ class TestOutputDriftDetection:
         # Return only 1 sample [15.0] (Perfect match to baseline center)
         mock_redis.zrevrange.return_value = [b"123:15.0:uuid"]
 
-        real_cb = CircuitBreaker(mock_redis, config)
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+
+        real_cb = CircuitBreaker(mock_redis, config, mock_notification_service)
         veritas_client = Mock()  # Added mock for veritas_client
         ingestor = TelemetryIngestor(
             config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client
@@ -467,7 +480,11 @@ class TestOutputDriftDetection:
         # Sample 1000.0 (Far outside bins 0-30)
         mock_redis.zrevrange.return_value = [b"123:1000.0:uuid"]
 
-        real_cb = CircuitBreaker(mock_redis, config)
+        from coreason_sentinel.interfaces import NotificationServiceProtocol
+
+        mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+
+        real_cb = CircuitBreaker(mock_redis, config, mock_notification_service)
         veritas_client = Mock()  # Added mock for veritas_client
         ingestor = TelemetryIngestor(
             config, real_cb, Mock(should_sample=Mock(return_value=False)), baseline_provider, veritas_client

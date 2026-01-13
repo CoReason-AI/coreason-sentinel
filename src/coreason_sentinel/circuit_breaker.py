@@ -18,6 +18,7 @@ from enum import Enum
 
 from redis import Redis
 
+from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
@@ -34,9 +35,15 @@ class CircuitBreaker:
     Uses Redis for persistence to ensure stateless workers see the same state.
     """
 
-    def __init__(self, redis_client: Redis[bytes], config: SentinelConfig):
+    def __init__(
+        self,
+        redis_client: Redis[bytes],
+        config: SentinelConfig,
+        notification_service: NotificationServiceProtocol,
+    ):
         self.redis = redis_client
         self.config = config
+        self.notification_service = notification_service
         self.agent_id = config.agent_id
         self._state_key = f"sentinel:breaker:{self.agent_id}:state"
         self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
@@ -66,16 +73,32 @@ class CircuitBreaker:
             logger.error(f"Failed to fetch circuit breaker state from Redis: {e}")
             return CircuitBreakerState.CLOSED
 
-    def set_state(self, state: CircuitBreakerState) -> None:
+    def set_state(self, state: CircuitBreakerState, reason: str | None = None) -> None:
         """
         Explicitly sets the circuit breaker state.
         """
         try:
-            self.redis.set(self._state_key, state.value)
+            # Atomic set and get old value
+            old_state_bytes = self.redis.getset(self._state_key, state.value)
 
-            if state == CircuitBreakerState.OPEN:
+            # Determine if we are effectively transitioning to OPEN
+            # We treat None (missing key) as CLOSED.
+            was_open = old_state_bytes is not None and old_state_bytes.decode("utf-8") == CircuitBreakerState.OPEN.value
+
+            if state == CircuitBreakerState.OPEN and not was_open:
                 # Set cooldown
                 self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
+                # Send Critical Alert
+                if self.config.owner_email:
+                    alert_reason = reason or "Circuit Breaker Tripped (Manual or Unknown)"
+                    try:
+                        self.notification_service.send_critical_alert(
+                            email=self.config.owner_email,
+                            agent_id=self.agent_id,
+                            reason=alert_reason,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send critical alert notification: {e}")
 
             logger.info(f"Circuit Breaker for {self.agent_id} transitioned to {state.value}")
         except Exception as e:
@@ -150,11 +173,12 @@ class CircuitBreaker:
 
         for trigger in self.config.triggers:
             if self._evaluate_trigger(trigger, now):
-                logger.warning(
+                reason = (
                     f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
-                    f"in last {trigger.window_seconds}s. Tripping Circuit Breaker."
+                    f"in last {trigger.window_seconds}s"
                 )
-                self.set_state(CircuitBreakerState.OPEN)
+                logger.warning(f"{reason}. Tripping Circuit Breaker.")
+                self.set_state(CircuitBreakerState.OPEN, reason=reason)
                 violation = True
                 return
 
