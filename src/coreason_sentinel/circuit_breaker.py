@@ -14,12 +14,13 @@ import math
 import random
 import time
 import uuid
+from datetime import datetime
 from enum import Enum
 
 from redis import Redis
 
 from coreason_sentinel.interfaces import NotificationServiceProtocol
-from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
+from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
 
@@ -247,6 +248,51 @@ class CircuitBreaker:
         except Exception as e:
             logger.error(f"Failed to fetch recent values for {metric_name}: {e}")
             return []
+
+    def get_health_report(self) -> HealthReport:
+        """
+        Generates a Health Report for the agent, aggregating metrics over the last hour.
+        """
+        state = self.get_state()
+        metrics: dict[str, float] = {}
+
+        # Default metrics to aggregate
+        # 1. Avg Latency (1h)
+        metrics["avg_latency"] = self._calculate_metric_average("latency", window_seconds=3600)
+
+        # 2. Faithfulness (1h) - Average score
+        metrics["faithfulness"] = self._calculate_metric_average("faithfulness", window_seconds=3600)
+
+        # 3. Cost Per Query (1h) - Average cost per event
+        metrics["cost_per_query"] = self._calculate_metric_average("cost", window_seconds=3600)
+
+        # 4. KL Divergence (1h) - Average drift score
+        metrics["kl_divergence"] = self._calculate_metric_average("output_drift_kl", window_seconds=3600)
+
+        return HealthReport(
+            timestamp=datetime.fromtimestamp(time.time()),
+            breaker_state=state.value,
+            metrics=metrics,
+        )
+
+    def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
+        """
+        Calculates the average value of a metric over the specified window.
+        Returns 0.0 if no data exists.
+        """
+        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
+        start_time = time.time() - window_seconds
+        try:
+            events = self.redis.zrangebyscore(key, start_time, "+inf")
+            if not events:
+                return 0.0
+
+            values = [self._parse_value_from_member(m) for m in events]
+
+            return sum(values) / len(values)
+        except Exception as e:
+            logger.error(f"Failed to calculate average for {metric_name}: {e}")
+            return 0.0
 
     def _parse_value_from_member(self, member: bytes) -> float:
         """
