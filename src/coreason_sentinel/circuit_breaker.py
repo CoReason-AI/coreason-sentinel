@@ -288,8 +288,6 @@ class CircuitBreaker:
                 return 0.0
 
             values = [self._parse_value_from_member(m) for m in events]
-            if not values:
-                return 0.0
 
             return sum(values) / len(values)
         except Exception as e:
