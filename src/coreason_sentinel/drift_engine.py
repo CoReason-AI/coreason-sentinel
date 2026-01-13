@@ -137,6 +137,24 @@ class DriftEngine:
         # Distance = 1 - Similarity
         return 1.0 - similarity
 
+    @classmethod
+    def compute_relevance_drift(cls, query_embedding: List[float], response_embedding: List[float]) -> float:
+        """
+        Computes the Relevance Drift between a Query and a Response using Cosine Distance.
+        Relevance Drift = 1.0 - Cosine Similarity.
+
+        Args:
+            query_embedding: The embedding vector of the user query.
+            response_embedding: The embedding vector of the model response.
+
+        Returns:
+            float: Drift score. 0.0 means perfectly relevant (identical direction).
+                   1.0 means orthogonal. > 1.0 means opposite.
+        """
+        # reuse the static method
+        similarity = cls.compute_cosine_similarity(query_embedding, response_embedding)
+        return 1.0 - similarity
+
     @staticmethod
     def compute_distribution_from_samples(samples: List[float], bin_edges: List[float]) -> List[float]:
         """
