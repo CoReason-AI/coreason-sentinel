@@ -132,3 +132,136 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
 
         report = self.breaker.get_health_report()
         self.assertEqual(report.breaker_state, "OPEN")
+
+
+class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mock_redis = MagicMock(spec=Redis)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[],
+        )
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
+
+    def test_zero_values(self) -> None:
+        """
+        Verify that valid 0.0 values (e.g. 0 cost) are correctly averaged
+        and not treated as missing data.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+        now = time.time()
+
+        # 3 events, two are 0.0, one is 3.0. Average should be 1.0.
+        # If 0.0 was ignored, average would be 3.0.
+        members = [f"{now}:0.0:id1".encode(), f"{now}:0.0:id2".encode(), f"{now}:3.0:id3".encode()]
+
+        # Return these members for 'cost' metric
+        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+            if "cost" in key:
+                return members
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        report = self.breaker.get_health_report()
+
+        self.assertAlmostEqual(report.metrics["cost_per_query"], 1.0)
+        self.assertEqual(len(members), 3)
+
+    def test_mixed_valid_and_malformed_data(self) -> None:
+        """
+        Verify behavior when Redis contains malformed data.
+        Current implementation fallback is 1.0.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+        now = time.time()
+
+        # 1 valid (4.0), 1 malformed (defaults to 1.0). Average -> 2.5
+        members = [f"{now}:4.0:id1".encode(), b"malformed_data"]
+
+        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+            if "faithfulness" in key:
+                return members
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        report = self.breaker.get_health_report()
+
+        # Expect 2.5 because malformed -> 1.0
+        self.assertAlmostEqual(report.metrics["faithfulness"], 2.5)
+
+    def test_sparse_metrics(self) -> None:
+        """
+        Verify report generation when only one metric type exists.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+        now = time.time()
+
+        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+            if "avg_latency" in key or "latency" in key:
+                return [f"{now}:0.5:id1".encode()]
+            # Others return empty
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        report = self.breaker.get_health_report()
+
+        self.assertAlmostEqual(report.metrics["avg_latency"], 0.5)
+        self.assertEqual(report.metrics["faithfulness"], 0.0)
+        self.assertEqual(report.metrics["cost_per_query"], 0.0)
+
+    def test_large_volume_aggregation(self) -> None:
+        """
+        Simulate 1000 data points to ensure aggregation logic holds up.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+        now = time.time()
+
+        # 1000 items with value 1.0. Average should be 1.0.
+        members = [f"{now}:1.0:id{i}".encode() for i in range(1000)]
+
+        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+            if "latency" in key:
+                return members
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        start_time = time.time()
+        report = self.breaker.get_health_report()
+        end_time = time.time()
+
+        self.assertAlmostEqual(report.metrics["avg_latency"], 1.0)
+        # Ensure it's reasonably fast (mock overhead exists, but logic is O(N))
+        self.assertLess(end_time - start_time, 1.0)
+
+    def test_boundary_window_inclusion(self) -> None:
+        """
+        Verify events at exactly `now - 3600` are included (inclusive behavior),
+        and `now` are included.
+        NOTE: zrangebyscore(min, max) is inclusive.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+        now = 10000.0  # Fixed time
+
+        # We need to control what zrangebyscore receives to verify logic.
+        # But we are mocking zrangebyscore, so we can't test if zrangebyscore *itself* is inclusive.
+        # We can only test that we PASS the correct boundaries to zrangebyscore.
+
+        with unittest.mock.patch("time.time", return_value=now):
+            self.breaker.get_health_report()
+
+            # Check the call arguments for latency
+            # We assume the implementation uses `now - window`
+            expected_start = now - 3600
+
+            for call in self.mock_redis.zrangebyscore.call_args_list:
+                args = call.args
+                if "latency" in args[0]:
+                    # Assert that we are asking for range starting at exactly expected_start
+                    self.assertEqual(args[1], expected_start)
