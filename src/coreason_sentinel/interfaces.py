@@ -123,3 +123,21 @@ class NotificationServiceProtocol(Protocol):
             reason: The description of why the alert was triggered (e.g., trigger violation).
         """
         ...
+
+
+class PhoenixClientProtocol(Protocol):
+    """
+    Interface for the Phoenix Tracing Service.
+    Responsible for updating spans with new attributes (e.g., evaluation grades).
+    """
+
+    def update_span_attributes(self, trace_id: str, span_id: str, attributes: Dict[str, Any]) -> None:
+        """
+        Updates an existing span with new attributes.
+
+        Args:
+            trace_id: The Trace ID associated with the span.
+            span_id: The Span ID to update.
+            attributes: A dictionary of attributes to append/update.
+        """
+        ...

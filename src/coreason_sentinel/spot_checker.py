@@ -11,7 +11,11 @@
 import random
 from typing import Any, Dict, Optional
 
-from coreason_sentinel.interfaces import AssayGraderProtocol, GradeResult
+from coreason_sentinel.interfaces import (
+    AssayGraderProtocol,
+    GradeResult,
+    PhoenixClientProtocol,
+)
 from coreason_sentinel.models import ConditionalSamplingRule, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
@@ -21,9 +25,15 @@ class SpotChecker:
     The Auditor: Responsible for sampling and grading live traffic.
     """
 
-    def __init__(self, config: SentinelConfig, grader: AssayGraderProtocol):
+    def __init__(
+        self,
+        config: SentinelConfig,
+        grader: AssayGraderProtocol,
+        phoenix_client: PhoenixClientProtocol,
+    ):
         self.config = config
         self.grader = grader
+        self.phoenix_client = phoenix_client
 
     def should_sample(self, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
@@ -76,6 +86,27 @@ class SpotChecker:
             result = self.grader.grade_conversation(conversation)
             # Log the result
             logger.info(f"Grade Result - Faithfulness: {result.faithfulness_score}, Safety: {result.safety_score}")
+
+            # Integration: Push grades back to Phoenix if trace info is available
+            metadata = conversation.get("metadata", {})
+            trace_id = metadata.get("trace_id")
+            span_id = metadata.get("span_id")
+
+            if trace_id and span_id:
+                try:
+                    attributes = {
+                        "eval.faithfulness.score": result.faithfulness_score,
+                        "eval.safety.score": result.safety_score,
+                    }
+                    # Merge details if they are simple types? Or just dump them?
+                    # For now, stick to scores as per PRD requirement.
+                    self.phoenix_client.update_span_attributes(
+                        trace_id=trace_id, span_id=span_id, attributes=attributes
+                    )
+                    logger.info(f"Updated Phoenix span {span_id} with evaluation results.")
+                except Exception as e:
+                    logger.error(f"Failed to update Phoenix span: {e}")
+
             return result
         except Exception as e:
             logger.error(f"Failed to grade conversation: {e}")
