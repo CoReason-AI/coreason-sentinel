@@ -1,3 +1,13 @@
+# Copyright (c) 2025 CoReason, Inc.
+#
+# This software is proprietary and dual-licensed.
+# Licensed under the Prosperity Public License 3.0 (the "License").
+# A copy of the license is available at https://prosperitylicense.com/versions/3.0.0
+# For details, see the LICENSE file.
+# Commercial use beyond a 30-day trial requires a separate license.
+#
+# Source Code: https://github.com/CoReason-AI/coreason_sentinel
+
 import unittest.mock
 from unittest.mock import MagicMock
 
@@ -13,6 +23,11 @@ def mock_grader() -> MagicMock:
 
 
 @pytest.fixture
+def mock_phoenix() -> MagicMock:
+    return MagicMock()
+
+
+@pytest.fixture
 def base_config() -> SentinelConfig:
     return SentinelConfig(
         agent_id="test-agent",
@@ -22,22 +37,31 @@ def base_config() -> SentinelConfig:
     )
 
 
-def test_should_sample_default_false(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
-    checker = SpotChecker(base_config, mock_grader)
+def test_should_sample_default_false(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
     # Rate is 0.0, no rules
     assert checker.should_sample({"some": "data"}) is False
 
 
-def test_should_sample_default_true(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_should_sample_default_true(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
     base_config.sampling_rate = 1.0
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
     assert checker.should_sample({"some": "data"}) is True
 
 
-def test_rule_equals_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
-    rule = ConditionalSamplingRule(metadata_key="sentiment", operator="EQUALS", value="negative", sample_rate=1.0)
+def test_rule_equals_match(base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock) -> None:
+    rule = ConditionalSamplingRule(
+        metadata_key="sentiment",
+        operator="EQUALS",
+        value="negative",
+        sample_rate=1.0,
+    )
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Match
     assert checker.should_sample({"sentiment": "negative"}) is True
@@ -45,10 +69,10 @@ def test_rule_equals_match(base_config: SentinelConfig, mock_grader: MagicMock) 
     assert checker.should_sample({"sentiment": "positive"}) is False
 
 
-def test_rule_contains_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_rule_contains_match(base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock) -> None:
     rule = ConditionalSamplingRule(metadata_key="tags", operator="CONTAINS", value="vip", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Match in list
     assert checker.should_sample({"tags": ["user", "vip"]}) is True
@@ -60,16 +84,18 @@ def test_rule_contains_match(base_config: SentinelConfig, mock_grader: MagicMock
     assert checker.should_sample({"tags": 123}) is False
 
 
-def test_rule_exists_match(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_rule_exists_match(base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock) -> None:
     rule = ConditionalSamplingRule(metadata_key="error_trace", operator="EXISTS", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     assert checker.should_sample({"error_trace": "stack..."}) is True
     assert checker.should_sample({"other": "value"}) is False
 
 
-def test_multiple_rules_precedence(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_multiple_rules_precedence(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
     # Rule A: 100% if "urgent"
     # Rule B: 50% if "vip"
     # Global: 0%
@@ -77,7 +103,7 @@ def test_multiple_rules_precedence(base_config: SentinelConfig, mock_grader: Mag
     rule_b = ConditionalSamplingRule(metadata_key="user_type", operator="EQUALS", value="vip", sample_rate=0.5)
 
     base_config.conditional_sampling_rules = [rule_a, rule_b]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Only Urgent (100%)
     assert checker.should_sample({"priority": "urgent"}) is True
@@ -99,10 +125,12 @@ def test_multiple_rules_precedence(base_config: SentinelConfig, mock_grader: Mag
         assert checker.should_sample({"priority": "urgent", "user_type": "vip"}) is True
 
 
-def test_missing_metadata_handling(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_missing_metadata_handling(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
     rule = ConditionalSamplingRule(metadata_key="missing", operator="EQUALS", value="value", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Metadata None
     assert checker.should_sample(None) is False
@@ -110,18 +138,22 @@ def test_missing_metadata_handling(base_config: SentinelConfig, mock_grader: Mag
     assert checker.should_sample({}) is False
 
 
-def test_rule_matches_derived_metric(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_rule_matches_derived_metric(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
     # Simulate the integration scenario where Ingestor adds "refusal_count"
     rule = ConditionalSamplingRule(metadata_key="refusal_count", operator="EXISTS", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Metadata from ingestor
     metadata = {"refusal_count": 1.0, "other": "info"}
     assert checker.should_sample(metadata) is True
 
 
-def test_complex_rule_interaction_intermediate_rates(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_complex_rule_interaction_intermediate_rates(
+    base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock
+) -> None:
     # Rule A: 0.2
     # Rule B: 0.5
     # Rule C: 0.8
@@ -132,7 +164,7 @@ def test_complex_rule_interaction_intermediate_rates(base_config: SentinelConfig
     rule_c = ConditionalSamplingRule(metadata_key="k3", operator="EXISTS", sample_rate=0.8)
 
     base_config.conditional_sampling_rules = [rule_a, rule_b, rule_c]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     metadata = {"k1": 1, "k2": 1, "k3": 1}
 
@@ -145,11 +177,11 @@ def test_complex_rule_interaction_intermediate_rates(base_config: SentinelConfig
         assert checker.should_sample(metadata) is False
 
 
-def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock) -> None:
     # EQUALS None
     rule_none = ConditionalSamplingRule(metadata_key="data", operator="EQUALS", value=None, sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule_none]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     assert checker.should_sample({"data": None}) is True
     assert checker.should_sample({"data": "some"}) is False
@@ -157,7 +189,7 @@ def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock) ->
     # EQUALS Boolean
     rule_bool = ConditionalSamplingRule(metadata_key="is_test", operator="EQUALS", value=True, sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule_bool]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     assert checker.should_sample({"is_test": True}) is True
     assert checker.should_sample({"is_test": False}) is False
@@ -165,15 +197,15 @@ def test_edge_case_types(base_config: SentinelConfig, mock_grader: MagicMock) ->
     # CONTAINS on None (should be safe False)
     rule_contains = ConditionalSamplingRule(metadata_key="tags", operator="CONTAINS", value="x", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule_contains]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     assert checker.should_sample({"tags": None}) is False
 
 
-def test_case_sensitivity(base_config: SentinelConfig, mock_grader: MagicMock) -> None:
+def test_case_sensitivity(base_config: SentinelConfig, mock_grader: MagicMock, mock_phoenix: MagicMock) -> None:
     rule = ConditionalSamplingRule(metadata_key="status", operator="EQUALS", value="ERROR", sample_rate=1.0)
     base_config.conditional_sampling_rules = [rule]
-    checker = SpotChecker(base_config, mock_grader)
+    checker = SpotChecker(base_config, mock_grader, mock_phoenix)
 
     # Match exact
     assert checker.should_sample({"status": "ERROR"}) is True

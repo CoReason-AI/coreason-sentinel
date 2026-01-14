@@ -15,7 +15,13 @@ from unittest.mock import MagicMock, patch
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
-from coreason_sentinel.interfaces import BaselineProviderProtocol, GradeResult, VeritasClientProtocol, VeritasEvent
+from coreason_sentinel.interfaces import (
+    BaselineProviderProtocol,
+    GradeResult,
+    PhoenixClientProtocol,
+    VeritasClientProtocol,
+    VeritasEvent,
+)
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 
@@ -383,9 +389,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         from coreason_sentinel.interfaces import AssayGraderProtocol
 
         mock_grader = MagicMock(spec=AssayGraderProtocol)
+        mock_phoenix = MagicMock(spec=PhoenixClientProtocol)
         mock_bp = MagicMock(spec=BaselineProviderProtocol)
         mock_veritas = MagicMock(spec=VeritasClientProtocol)
-        real_sc = SpotChecker(config, mock_grader)
+        real_sc = SpotChecker(config, mock_grader, mock_phoenix)
 
         ingestor = TelemetryIngestor(config, real_cb, real_sc, mock_bp, mock_veritas)
 
