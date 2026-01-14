@@ -131,9 +131,7 @@ class PhoenixClientProtocol(Protocol):
     Responsible for updating spans with new attributes (e.g., evaluation grades).
     """
 
-    def update_span_attributes(
-        self, trace_id: str, span_id: str, attributes: Dict[str, Any]
-    ) -> None:
+    def update_span_attributes(self, trace_id: str, span_id: str, attributes: Dict[str, Any]) -> None:
         """
         Updates an existing span with new attributes.
 

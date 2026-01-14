@@ -58,7 +58,7 @@ class TestSpotChecker(unittest.TestCase):
 
         conversation = {
             "messages": [{"role": "user", "content": "hello"}],
-            "metadata": {"trace_id": "trace-123", "span_id": "span-456"}
+            "metadata": {"trace_id": "trace-123", "span_id": "span-456"},
         }
         result = self.checker.check_sample(conversation)
 
@@ -89,7 +89,7 @@ class TestSpotChecker(unittest.TestCase):
 
         conversation = {
             "messages": [{"role": "user", "content": "hello"}],
-            "metadata": {"trace_id": "trace-123", "span_id": "span-456"}
+            "metadata": {"trace_id": "trace-123", "span_id": "span-456"},
         }
         result = self.checker.check_sample(conversation)
 

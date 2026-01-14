@@ -85,9 +85,7 @@ class SpotChecker:
             logger.info(f"Spot Checking conversation for agent {self.config.agent_id}")
             result = self.grader.grade_conversation(conversation)
             # Log the result
-            logger.info(
-                f"Grade Result - Faithfulness: {result.faithfulness_score}, Safety: {result.safety_score}"
-            )
+            logger.info(f"Grade Result - Faithfulness: {result.faithfulness_score}, Safety: {result.safety_score}")
 
             # Integration: Push grades back to Phoenix if trace info is available
             metadata = conversation.get("metadata", {})
@@ -105,9 +103,7 @@ class SpotChecker:
                     self.phoenix_client.update_span_attributes(
                         trace_id=trace_id, span_id=span_id, attributes=attributes
                     )
-                    logger.info(
-                        f"Updated Phoenix span {span_id} with evaluation results."
-                    )
+                    logger.info(f"Updated Phoenix span {span_id} with evaluation results.")
                 except Exception as e:
                     logger.error(f"Failed to update Phoenix span: {e}")
 
