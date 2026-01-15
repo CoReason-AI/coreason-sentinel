@@ -12,6 +12,7 @@ import time
 import uuid
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from coreason_sentinel.ingestor import TelemetryIngestor
@@ -24,6 +25,12 @@ def test_health_check() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_get_telemetry_ingestor_default() -> None:
+    """Test that the default dependency raises NotImplementedError."""
+    with pytest.raises(NotImplementedError, match="TelemetryIngestor dependency must be overridden"):
+        get_telemetry_ingestor()
 
 
 def test_ingest_otel_span_success() -> None:
