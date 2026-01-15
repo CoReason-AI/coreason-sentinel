@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
+import numpy as np
 from redis import Redis
 
 from coreason_sentinel.interfaces import NotificationServiceProtocol
@@ -219,6 +220,15 @@ class CircuitBreaker:
                 aggregated_value = min(values)
             elif trigger.aggregation_method == "MAX":
                 aggregated_value = max(values)
+            elif trigger.aggregation_method.startswith("P"):
+                # Handle Percentiles (P50, P90, P95, P99)
+                try:
+                    percentile = float(trigger.aggregation_method[1:])
+                    # numpy.percentile expects range 0-100
+                    aggregated_value = float(np.percentile(values, percentile))
+                except (ValueError, IndexError):
+                    logger.error(f"Invalid percentile format {trigger.aggregation_method} for trigger {trigger.metric}")
+                    return False
 
             # Compare
             if trigger.operator == ">":
