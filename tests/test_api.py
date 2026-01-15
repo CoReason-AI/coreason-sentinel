@@ -20,13 +20,13 @@ from coreason_sentinel.main import app, get_telemetry_ingestor
 client = TestClient(app)
 
 
-def test_health_check():
+def test_health_check() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
-def test_ingest_otel_span_success():
+def test_ingest_otel_span_success() -> None:
     # Mock the ingestor
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
 
@@ -41,7 +41,7 @@ def test_ingest_otel_span_success():
             "start_time_unix_nano": int(time.time() * 1e9),
             "end_time_unix_nano": int((time.time() + 1) * 1e9),
             "attributes": {"llm.token_count.total": 100},
-            "status_code": "OK"
+            "status_code": "OK",
         }
 
         response = client.post("/ingest/otel/span", json=span_data)
@@ -60,15 +60,13 @@ def test_ingest_otel_span_success():
         app.dependency_overrides = {}
 
 
-def test_ingest_otel_span_invalid_data():
+def test_ingest_otel_span_invalid_data() -> None:
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
     try:
         # Missing required fields
-        span_data = {
-            "name": "incomplete_span"
-        }
+        span_data = {"name": "incomplete_span"}
 
         response = client.post("/ingest/otel/span", json=span_data)
         assert response.status_code == 422
@@ -76,7 +74,7 @@ def test_ingest_otel_span_invalid_data():
         app.dependency_overrides = {}
 
 
-def test_ingest_otel_span_bad_type():
+def test_ingest_otel_span_bad_type() -> None:
     """Edge Case: Sending a string where an int is expected."""
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -98,7 +96,7 @@ def test_ingest_otel_span_bad_type():
         app.dependency_overrides = {}
 
 
-def test_ingest_otel_span_malformed_attributes():
+def test_ingest_otel_span_malformed_attributes() -> None:
     """Edge Case: Sending a string instead of a dictionary for attributes."""
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -110,7 +108,7 @@ def test_ingest_otel_span_malformed_attributes():
             "name": "malformed_attr_span",
             "start_time_unix_nano": int(time.time() * 1e9),
             "end_time_unix_nano": int((time.time() + 1) * 1e9),
-            "attributes": "this_should_be_a_dict" # Bad type
+            "attributes": "this_should_be_a_dict",  # Bad type
         }
 
         response = client.post("/ingest/otel/span", json=span_data)
@@ -120,7 +118,7 @@ def test_ingest_otel_span_malformed_attributes():
         app.dependency_overrides = {}
 
 
-def test_ingest_otel_span_background_exception():
+def test_ingest_otel_span_background_exception() -> None:
     """Edge Case: Ensure API returns 202 even if background task fails (mocked)."""
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
     # Simulate an error inside the ingestor
@@ -137,15 +135,13 @@ def test_ingest_otel_span_background_exception():
             "end_time_unix_nano": int((time.time() + 1) * 1e9),
         }
 
-        # TestClient executes background tasks *synchronously* after the request is handled but before returning control?
+        # TestClient executes background tasks *synchronously* after the request is handled
+        # but before returning control.
         # Actually, TestClient catches exceptions in background tasks and re-raises them in the test.
         # So we expect the client.post to raise ValueError.
-        # But in production (uvicorn), this would just log an error and the response (202) would have already been sent.
 
         try:
             client.post("/ingest/otel/span", json=span_data)
-            # If we reach here without exception, maybe TestClient behavior changed or Starlette suppresses it?
-            # Recent Starlette/FastAPI versions might bubble up exceptions in TestClient.
         except ValueError as e:
             assert str(e) == "Something exploded!"
 
@@ -153,7 +149,7 @@ def test_ingest_otel_span_background_exception():
         app.dependency_overrides = {}
 
 
-def test_complex_batch_ingestion():
+def test_complex_batch_ingestion() -> None:
     """Complex Scenario: Simulate a batch of 10 requests."""
     mock_ingestor = MagicMock(spec=TelemetryIngestor)
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -167,7 +163,7 @@ def test_complex_batch_ingestion():
                 "name": f"batch_span_{i}",
                 "start_time_unix_nano": int(time.time() * 1e9),
                 "end_time_unix_nano": int((time.time() + 1) * 1e9),
-                "attributes": {"batch_index": i}
+                "attributes": {"batch_index": i},
             }
             response = client.post("/ingest/otel/span", json=span_data)
             assert response.status_code == 202
