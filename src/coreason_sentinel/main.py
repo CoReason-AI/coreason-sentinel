@@ -29,12 +29,12 @@ def get_telemetry_ingestor() -> TelemetryIngestor:
     raise NotImplementedError("TelemetryIngestor dependency must be overridden.")
 
 
-@app.get("/health")
+@app.get("/health")  # type: ignore[misc]
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/ingest/otel/span", status_code=202)
+@app.post("/ingest/otel/span", status_code=202)  # type: ignore[misc]
 def ingest_otel_span(
     span: OTELSpan,
     background_tasks: BackgroundTasks,
