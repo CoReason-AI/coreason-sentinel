@@ -243,3 +243,103 @@ class TestOTELSpanIngestion:
 
         ingestor.process_otel_span(span)
         circuit_breaker.record_metric.assert_any_call("token_count", 123.0)
+
+    def test_process_span_sentiment_extraction(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+        """Test extraction of sentiment metrics from gen_ai.prompt."""
+        ingestor, circuit_breaker = mock_components
+
+        attributes = {"gen_ai.prompt": "This is a STOP request because it is WRONG"}
+
+        span = OTELSpan(
+            trace_id="s1",
+            span_id="1",
+            name="sentiment_check",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes=attributes,
+        )
+
+        ingestor.process_otel_span(span)
+
+        # "STOP" and "WRONG" are default regex patterns
+        # Only one metric per event is recorded for sentiment frustration
+        circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_process_span_sentiment_extraction_fallback(
+        self, mock_components: tuple[TelemetryIngestor, MagicMock]
+    ) -> None:
+        """Test extraction of sentiment metrics from llm.input_messages fallback."""
+        ingestor, circuit_breaker = mock_components
+
+        attributes = {"llm.input_messages": "Please STOP now"}
+
+        span = OTELSpan(
+            trace_id="s2",
+            span_id="2",
+            name="sentiment_fallback",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes=attributes,
+        )
+
+        ingestor.process_otel_span(span)
+        circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+
+    def test_process_span_refusal_extraction(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+        """Test extraction of refusal metrics from is_refusal attribute."""
+        ingestor, circuit_breaker = mock_components
+
+        attributes = {"is_refusal": True}
+
+        span = OTELSpan(
+            trace_id="r1",
+            span_id="1",
+            name="refusal_check",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes=attributes,
+        )
+
+        ingestor.process_otel_span(span)
+        circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+
+    def test_process_span_refusal_false(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+        """Test extraction of refusal metrics when is_refusal is False."""
+        ingestor, circuit_breaker = mock_components
+
+        attributes = {"is_refusal": False}
+
+        span = OTELSpan(
+            trace_id="r2",
+            span_id="2",
+            name="refusal_check_false",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes=attributes,
+        )
+
+        ingestor.process_otel_span(span)
+        # Should NOT record refusal_count
+        calls = [c[0][0] for c in circuit_breaker.record_metric.call_args_list]
+        assert "refusal_count" not in calls
+
+    def test_process_span_no_custom_metrics(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+        """Test processing a span with no sentiment or refusal signals."""
+        ingestor, circuit_breaker = mock_components
+
+        attributes = {"gen_ai.prompt": "Hello world", "is_refusal": False}
+
+        span = OTELSpan(
+            trace_id="n1",
+            span_id="1",
+            name="normal_span",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes=attributes,
+        )
+
+        ingestor.process_otel_span(span)
+
+        calls = [c[0][0] for c in circuit_breaker.record_metric.call_args_list]
+        assert "sentiment_frustration_count" not in calls
+        assert "refusal_count" not in calls
