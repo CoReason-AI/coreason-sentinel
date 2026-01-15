@@ -11,7 +11,7 @@
 
 import re
 from datetime import datetime
-from typing import Dict
+from typing import Any, Dict
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
@@ -44,7 +44,7 @@ class TelemetryIngestor:
     def process_otel_span(self, span: OTELSpan) -> None:
         """
         Processes a single OpenTelemetry Span.
-        Extracts Latency, Tokens, and Cost for Circuit Breaker monitoring.
+        Extracts Latency, Tokens, Cost, Sentiment, and Refusal metrics for Circuit Breaker monitoring.
         """
         logger.info(f"Processing OTEL Span {span.span_id} - {span.name}")
 
@@ -53,10 +53,11 @@ class TelemetryIngestor:
             latency_sec = (span.end_time_unix_nano - span.start_time_unix_nano) / 1e9
             self.circuit_breaker.record_metric("latency", latency_sec)
 
+        attributes = span.attributes or {}
+
         # 2. Extract Token Counts
         # Try standard semantic conventions
         token_count = 0.0
-        attributes = span.attributes or {}
 
         try:
             # "llm.token_count.total" (OpenLLMetry / common convention)
@@ -81,7 +82,20 @@ class TelemetryIngestor:
                 cost = (token_count / 1000.0) * self.config.cost_per_1k_tokens
                 self.circuit_breaker.record_metric("cost", cost)
 
-        # 4. Check Triggers
+        # 4. Extract Custom Metrics (Refusal & Sentiment)
+        # Extract input text from standard semantic conventions
+        input_text = ""
+        if "gen_ai.prompt" in attributes:
+            input_text = str(attributes["gen_ai.prompt"])
+        elif "llm.input_messages" in attributes:
+            input_text = str(attributes["llm.input_messages"])
+        # Add more fallbacks if needed, but gen_ai.prompt is the target.
+
+        custom_metrics = self._extract_custom_metrics(input_text, attributes)
+        for metric_name, value in custom_metrics.items():
+            self.circuit_breaker.record_metric(metric_name, value)
+
+        # 5. Check Triggers
         self.circuit_breaker.check_triggers()
 
     def ingest_from_veritas_since(self, since: datetime) -> int:
@@ -123,7 +137,7 @@ class TelemetryIngestor:
                 self.circuit_breaker.record_metric(metric_name, float(value))
 
         # 1.5 Extract Custom Metrics (Refusal & Sentiment)
-        custom_metrics = self._extract_custom_metrics(event)
+        custom_metrics = self._extract_custom_metrics(event.input_text, event.metadata)
         for metric_name, value in custom_metrics.items():
             self.circuit_breaker.record_metric(metric_name, value)
 
@@ -186,21 +200,21 @@ class TelemetryIngestor:
         # Final trigger check after all metrics
         self.circuit_breaker.check_triggers()
 
-    def _extract_custom_metrics(self, event: VeritasEvent) -> Dict[str, float]:
+    def _extract_custom_metrics(self, input_text: str, metadata: Dict[str, Any]) -> Dict[str, float]:
         """
         Extracts custom metrics based on metadata flags and regex patterns.
         """
         metrics: Dict[str, float] = {}
 
         # 1. Refusal Detection
-        if event.metadata.get("is_refusal"):
+        if metadata.get("is_refusal"):
             metrics["refusal_count"] = 1.0
 
         # 2. Sentiment Detection (Regex)
         # We check the input_text for user frustration signals
         for pattern in self.config.sentiment_regex_patterns:
             try:
-                if re.search(pattern, event.input_text, re.IGNORECASE):
+                if re.search(pattern, input_text, re.IGNORECASE):
                     metrics["sentiment_frustration_count"] = 1.0
                     break  # Count once per event
             except re.error as e:
