@@ -29,7 +29,7 @@ class CircuitBreakerTrigger(BaseModel):
     operator: Literal[">", "<"] = Field(
         ">", description="Comparison operator. Default is '>' (greater than threshold)."
     )
-    aggregation_method: Literal["SUM", "AVG", "COUNT", "MIN", "MAX"] = Field(
+    aggregation_method: Literal["SUM", "AVG", "COUNT", "MIN", "MAX", "P50", "P90", "P95", "P99"] = Field(
         "SUM", description="Aggregation method for the metric over the window. Default is SUM."
     )
 
