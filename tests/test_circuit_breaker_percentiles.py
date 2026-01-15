@@ -271,3 +271,83 @@ def test_percentile_invalid_format(
     cb.check_triggers()
 
     assert cb.get_state() == CircuitBreakerState.CLOSED
+
+
+def test_percentile_single_value(
+    mock_redis: MockRedis, mock_notification_service: MagicMock, basic_config: SentinelConfig
+) -> None:
+    # Single value should be the same for any percentile
+    trigger = CircuitBreakerTrigger(
+        metric="latency", threshold=5.0, window_seconds=60, aggregation_method="P99", operator=">"
+    )
+    basic_config.triggers = [trigger]
+
+    cb = CircuitBreaker(mock_redis, basic_config, mock_notification_service)
+
+    cb.record_metric("latency", 4.0)
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.CLOSED
+
+    cb.record_metric("latency", 6.0)  # Total metrics: 4.0, 6.0
+    # P99 of [4.0, 6.0] should be close to 6.0 -> Trip
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.OPEN
+
+
+def test_percentile_identical_values(
+    mock_redis: MockRedis, mock_notification_service: MagicMock, basic_config: SentinelConfig
+) -> None:
+    # All values are 10.0
+    trigger = CircuitBreakerTrigger(
+        metric="latency", threshold=9.0, window_seconds=60, aggregation_method="P99", operator=">"
+    )
+    basic_config.triggers = [trigger]
+
+    cb = CircuitBreaker(mock_redis, basic_config, mock_notification_service)
+
+    for _ in range(50):
+        cb.record_metric("latency", 10.0)
+
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.OPEN
+
+
+def test_complex_spiky_traffic(
+    mock_redis: MockRedis, mock_notification_service: MagicMock, basic_config: SentinelConfig
+) -> None:
+    # Scenario: Normal traffic is low (0.1 - 0.5s), but we have occasional spikes (5.0s, 10.0s)
+    # P50 should remain low (no trip)
+    # P99 should catch the spikes (trip)
+
+    p50_trigger = CircuitBreakerTrigger(
+        metric="latency", threshold=1.0, window_seconds=60, aggregation_method="P50", operator=">"
+    )
+    p99_trigger = CircuitBreakerTrigger(
+        metric="latency", threshold=4.0, window_seconds=60, aggregation_method="P99", operator=">"
+    )
+    # We test them separately to verify behavior
+
+    # 1. Test P50 stability
+    basic_config.triggers = [p50_trigger]
+    cb = CircuitBreaker(mock_redis, basic_config, mock_notification_service)
+
+    # 90 requests at 0.2s, 10 requests at 10.0s
+    for _ in range(90):
+        cb.record_metric("latency", 0.2)
+    for _ in range(10):
+        cb.record_metric("latency", 10.0)
+
+    # Median (P50) of 100 items (sorted: 90x0.2, 10x10.0) is 0.2.
+    # Threshold is 1.0. Should NOT trip.
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.CLOSED
+
+    # 2. Test P99 sensitivity
+    basic_config.triggers = [p99_trigger]
+    # Reset state (simulated by re-init or just assuming closed if we didn't trip)
+    # But metrics are still in mock_redis.
+    # P99 of 100 items (sorted: 0.2 ... 10.0). Index ~99 is 10.0.
+    # Threshold is 4.0. Should trip.
+
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.OPEN
