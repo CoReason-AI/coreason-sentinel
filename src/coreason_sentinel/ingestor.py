@@ -116,6 +116,11 @@ class TelemetryIngestor:
         for event in events:
             try:
                 self.process_event(event)
+
+                # Run drift detection synchronously as per "Drift Execution Model" requirement
+                # PRD Note: "Drift is inevitable" - we must check it.
+                self.process_drift(event)
+
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to process event {event.event_id}: {e}")

@@ -34,6 +34,7 @@ class TestIngestorEdgeCases(unittest.TestCase):
         )
         self.mock_cb = MagicMock(spec=CircuitBreaker)
         self.mock_sc = MagicMock(spec=SpotChecker)
+        self.mock_sc.should_sample.return_value = False
         self.mock_bp = MagicMock(spec=BaselineProviderProtocol)
         self.mock_veritas = MagicMock(spec=VeritasClientProtocol)
         self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp, self.mock_veritas)
@@ -45,85 +46,96 @@ class TestIngestorEdgeCases(unittest.TestCase):
             session_id="sess-1",
             input_text="hello",
             output_text="world",
-            metrics={"latency": 100, "token_count": 50},
-            metadata={},
+            metrics={"latency": 0.1},
+            metadata={"embedding": [0.1, 0.2]},
         )
 
-    @patch("coreason_sentinel.ingestor.DriftEngine.detect_vector_drift")
-    @patch("coreason_sentinel.ingestor.logger")
-    def test_process_drift_partial_failures(self, mock_logger: MagicMock, mock_detect_vector: MagicMock) -> None:
+    def test_ingest_process_event_failure_skips_drift(self) -> None:
         """
-        Verify that if Vector Drift detection fails, Output and Relevance Drift still run.
+        Edge Case: If process_event fails, process_drift should NOT be called.
         """
-        # Setup: Vector drift fails with exception
-        self.event.metadata["embedding"] = [0.1, 0.2]
-        self.event.metadata["query_embedding"] = [1.0]
-        self.event.metadata["response_embedding"] = [1.0]
-        self.mock_bp.get_baseline_vectors.return_value = [[0.1, 0.2]]
+        # Setup: process_event raises exception
+        with patch.object(self.ingestor, "process_event", side_effect=Exception("Processing Failed")):
+            with patch.object(self.ingestor, "process_drift") as mock_drift:
+                self.mock_veritas.fetch_logs.return_value = [self.event]
 
-        mock_detect_vector.side_effect = Exception("Vector Failure")
+                count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
-        # Setup: Output drift works
-        # Setup: Relevance drift works (implicit since no mock failure)
+                # Should not have processed successfully
+                self.assertEqual(count, 0)
+                # process_drift should NOT have been called
+                mock_drift.assert_not_called()
 
-        self.ingestor.process_drift(self.event)
-
-        # 1. Verify Vector failure logged
-        mock_logger.error.assert_any_call("Failed to process vector drift detection: Vector Failure")
-
-        # 2. Verify Output Drift attempted (by checking if metric recorded or internal call made)
-        # We can check if _process_output_drift was called if we mocked it, but we didn't.
-        # Instead, check if metric recorded for output_length (part of logic)
-        self.mock_cb.record_metric.assert_any_call("output_length", 50.0)
-
-        # 3. Verify Relevance Drift recorded
-        self.mock_cb.record_metric.assert_any_call("relevance_drift", 0.0)
-
-    def test_process_drift_empty_event(self) -> None:
+    def test_ingest_process_drift_partial_failure_counts_success(self) -> None:
         """
-        Verify robustness against minimal event (no metadata, no metrics).
+        Edge Case: If process_drift fails (externally) or swallows errors,
+        but process_event succeeded, does it count?
+
+        Current Implementation: process_drift handles its own errors for specific drift types,
+        but if it raises a top-level exception (e.g. check_triggers fails),
+        it would bubble up and cause the event to be skipped in the loop (count not incremented).
+
+        Let's test the scenario where process_drift RAISES an exception (simulating catastrophic failure).
         """
-        empty_event = VeritasEvent(
-            event_id="empty",
+        with patch.object(self.ingestor, "process_drift", side_effect=Exception("Drift Boom")):
+            self.mock_veritas.fetch_logs.return_value = [self.event]
+
+            # The exception is caught in the loop in ingestor.py
+            count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+
+            # Since the try/except block wraps both calls, if process_drift fails,
+            # the 'count += 1' line is skipped.
+            # So expected count is 0.
+            self.assertEqual(count, 0)
+
+        # Verify metrics from process_event WERE recorded (since it ran before the crash)
+        self.mock_cb.record_metric.assert_any_call("latency", 0.1)
+
+    def test_ingest_drift_lag_simulation(self) -> None:
+        """
+        Complex Scenario: Drift calculation is slow.
+        Ensures strict ordering: process_event -> process_drift -> next event.
+        """
+        call_order = []
+
+        def mock_process_event(evt: VeritasEvent) -> None:
+            call_order.append(f"event_{evt.event_id}")
+
+        def mock_process_drift(evt: VeritasEvent) -> None:
+            call_order.append(f"drift_{evt.event_id}")
+
+        with patch.object(self.ingestor, "process_event", side_effect=mock_process_event):
+            with patch.object(self.ingestor, "process_drift", side_effect=mock_process_drift):
+                evt1 = self.event.model_copy(update={"event_id": "1"})
+                evt2 = self.event.model_copy(update={"event_id": "2"})
+                self.mock_veritas.fetch_logs.return_value = [evt1, evt2]
+
+                self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+
+                # Strict sequential order
+                expected = ["event_1", "drift_1", "event_2", "drift_2"]
+                self.assertEqual(call_order, expected)
+
+    def test_ingest_empty_event_fields(self) -> None:
+        """
+        Edge Case: Event with empty strings/dicts.
+        Should not crash.
+        """
+        weird_event = VeritasEvent(
+            event_id="evt-empty",
             timestamp=datetime.now(timezone.utc),
-            agent_id="agent",
-            session_id="s1",
+            agent_id="test-agent",
+            session_id="",
             input_text="",
             output_text="",
             metrics={},
             metadata={},
         )
 
-        # Should execute without error
-        self.ingestor.process_drift(empty_event)
+        self.mock_veritas.fetch_logs.return_value = [weird_event]
 
-        # Verify no drift metrics recorded
-        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
-        self.assertNotIn("vector_drift", calls)
-        self.assertNotIn("relevance_drift", calls)
-        # Output length might be recorded as 0.0 (fallback to len("") which is 0)
-        self.mock_cb.record_metric.assert_any_call("output_length", 0.0)
+        count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
-    def test_drift_lag_scenario(self) -> None:
-        """
-        Verify that metrics recorded by process_drift are accepted by CircuitBreaker
-        even if there is a lag (simulated by sleep is slow, so we rely on logic).
-        We just check that record_metric is called.
-        """
-        # Event happened 1 hour ago
-        old_event = VeritasEvent(
-            event_id="old",
-            timestamp=datetime.fromtimestamp(1000, timezone.utc),
-            agent_id="agent",
-            session_id="s1",
-            input_text="hi",
-            output_text="hi",
-            metrics={},
-            metadata={"query_embedding": [1.0], "response_embedding": [0.0]},
-        )
-
-        # Process now
-        self.ingestor.process_drift(old_event)
-
-        # Check metric recorded
-        self.mock_cb.record_metric.assert_any_call("relevance_drift", 1.0)
+        self.assertEqual(count, 1)
+        # Verify no crash in process_drift
+        self.mock_bp.get_baseline_vectors.assert_not_called()
