@@ -12,6 +12,7 @@ import unittest.mock
 from unittest.mock import MagicMock
 
 import pytest
+
 from coreason_sentinel.models import ConditionalSamplingRule, SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 

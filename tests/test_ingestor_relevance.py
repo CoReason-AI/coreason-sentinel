@@ -12,6 +12,7 @@ from datetime import datetime
 from unittest.mock import MagicMock
 
 import pytest
+
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.interfaces import VeritasEvent

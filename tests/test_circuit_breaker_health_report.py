@@ -12,10 +12,11 @@ import time
 import unittest
 from unittest.mock import MagicMock
 
+from redis import Redis
+
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import HealthReport, SentinelConfig
-from redis import Redis
 
 
 class TestCircuitBreakerHealthReport(unittest.TestCase):

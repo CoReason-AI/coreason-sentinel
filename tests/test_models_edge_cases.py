@@ -11,13 +11,14 @@
 import unittest
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from coreason_sentinel.models import (
     CircuitBreakerTrigger,
     ConditionalSamplingRule,
     HealthReport,
     SentinelConfig,
 )
-from pydantic import ValidationError
 
 
 class TestModelsEdgeCases(unittest.TestCase):

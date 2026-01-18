@@ -11,6 +11,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.interfaces import OTELSpan
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
