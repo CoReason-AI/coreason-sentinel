@@ -147,7 +147,7 @@ class TestOutputDriftDetection:
             metadata={},
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Verify calls
         # 1. output_length recorded
@@ -198,7 +198,7 @@ class TestOutputDriftDetection:
             metadata={},
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Verify drift is high
         drift_call_found = False
@@ -245,7 +245,7 @@ class TestOutputDriftDetection:
         # Mock recent samples to avoid None errors
         mock_redis.zrevrange.return_value = [b"123:3.0:uuid"]
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Verify 'output_length' recorded with value 3.0
         length_call_found = False
@@ -291,7 +291,7 @@ class TestOutputDriftDetection:
         )
         mock_redis.zrevrange.return_value = [b"123:42.0:uuid"]
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Verify 'output_length' recorded with value 42.0
         length_call_found = False
@@ -398,7 +398,7 @@ class TestOutputDriftDetection:
         )
 
         for _ in range(5):
-            ingestor.process_event(good_event)
+            ingestor.process_drift(good_event)
 
         # Verify NO trip
         mock_redis.set.assert_not_called()
@@ -425,7 +425,7 @@ class TestOutputDriftDetection:
         mock_redis.getset.return_value = b"CLOSED"
 
         for _ in range(5):
-            ingestor.process_event(bad_event)
+            ingestor.process_drift(bad_event)
 
         # Verify TRIP
         mock_redis.getset.assert_any_call("sentinel:breaker:test-agent:state", "OPEN")
@@ -460,7 +460,7 @@ class TestOutputDriftDetection:
             metadata={},
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Check drift recorded. Should be low but not failing.
         drift_call_found = False
@@ -501,7 +501,7 @@ class TestOutputDriftDetection:
             metadata={},
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Check drift recorded.
         # Distribution will be [0, 0, 0].

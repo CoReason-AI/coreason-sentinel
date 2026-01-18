@@ -159,9 +159,9 @@ class TestComplexRelevanceScenario:
             metadata={"query_embedding": [1.0, 0.0], "response_embedding": [1.0, 1.0]},
         )
 
-        ingestor.process_event(evt1)
-        ingestor.process_event(evt2)
-        ingestor.process_event(evt3)
+        ingestor.process_drift(evt1)
+        ingestor.process_drift(evt2)
+        ingestor.process_drift(evt3)
 
         # Verification
         # Check that 'record_metric' was called or check our fake redis
