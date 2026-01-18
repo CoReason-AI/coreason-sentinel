@@ -166,6 +166,7 @@ class TelemetryIngestor:
                 # PRD says: "If estimated quality drops... Sentinel effectively pulls the plug"
                 # So we should record the score as a metric.
                 self.circuit_breaker.record_metric("faithfulness_score", grade.faithfulness_score)
+                self.circuit_breaker.record_metric("retrieval_precision_score", grade.retrieval_precision_score)
                 self.circuit_breaker.record_metric("safety_score", grade.safety_score)
 
         # Final trigger check after all metrics

@@ -96,6 +96,7 @@ class SpotChecker:
                 try:
                     attributes = {
                         "eval.faithfulness.score": result.faithfulness_score,
+                        "eval.retrieval.precision.score": result.retrieval_precision_score,
                         "eval.safety.score": result.safety_score,
                     }
                     # Merge details if they are simple types? Or just dump them?
