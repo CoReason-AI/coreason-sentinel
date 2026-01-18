@@ -133,3 +133,14 @@ class TestDriftEngine(unittest.TestCase):
         live = [[[1.0]], [[1.0]]]
         with self.assertRaises(ValueError):
             DriftEngine.detect_vector_drift(baseline, live)  # type: ignore
+
+    def test_distribution_samples_outside_bins(self) -> None:
+        """Test when samples are all outside bin edges (counts sum to 0)."""
+        samples = [10.0, 20.0]
+        bin_edges = [0.0, 5.0]  # Samples outside range
+        # bins: [0, 5]. 10 and 20 are ignored? np.histogram ignores outliers?
+        # np.histogram behavior: values outside range are not counted.
+
+        dist = DriftEngine.compute_distribution_from_samples(samples, bin_edges)
+        # Should return list of 0.0s (len = len(edges)-1 = 1)
+        self.assertEqual(dist, [0.0])

@@ -81,6 +81,16 @@ class SentinelConfig(BaseModel):
         default_factory=list, description="List of rules to override the default sampling rate based on metadata."
     )
 
+    def get_max_window_for_metric(self, metric_name: str, default: int = 3600) -> int:
+        """
+        Calculates the maximum window size required for a given metric based on configured triggers.
+        """
+        max_window = default
+        for t in self.triggers:
+            if t.metric == metric_name:
+                max_window = max(max_window, t.window_seconds)
+        return max_window
+
 
 class HealthReport(BaseModel):
     """

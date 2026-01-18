@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from coreason_sentinel.ingestor import TelemetryIngestor
-from coreason_sentinel.main import app, get_telemetry_ingestor
+from coreason_sentinel.handlers.otel_handler import OtelIngestionHandler
+from coreason_sentinel.main import app, get_otel_handler
 
 client = TestClient(app)
 
@@ -27,18 +27,18 @@ def test_health_check() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_get_telemetry_ingestor_default() -> None:
+def test_get_otel_handler_default() -> None:
     """Test that the default dependency raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="TelemetryIngestor dependency must be overridden"):
-        get_telemetry_ingestor()
+    with pytest.raises(NotImplementedError, match="OtelIngestionHandler dependency must be overridden"):
+        get_otel_handler()
 
 
 def test_ingest_otel_span_success() -> None:
-    # Mock the ingestor
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    # Mock the handler
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
 
     # Override the dependency
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         span_data = {
@@ -57,9 +57,9 @@ def test_ingest_otel_span_success() -> None:
         assert response.json() == {"status": "accepted", "span_id": span_data["span_id"]}
 
         # Verify background task was likely scheduled/executed
-        mock_ingestor.process_otel_span.assert_called_once()
+        mock_handler.process_span.assert_called_once()
 
-        called_arg = mock_ingestor.process_otel_span.call_args[0][0]
+        called_arg = mock_handler.process_span.call_args[0][0]
         assert called_arg.span_id == span_data["span_id"]
         assert called_arg.name == span_data["name"]
 
@@ -68,8 +68,8 @@ def test_ingest_otel_span_success() -> None:
 
 
 def test_ingest_otel_span_invalid_data() -> None:
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         # Missing required fields
@@ -83,8 +83,8 @@ def test_ingest_otel_span_invalid_data() -> None:
 
 def test_ingest_otel_span_bad_type() -> None:
     """Edge Case: Sending a string where an int is expected."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         span_data = {
@@ -105,8 +105,8 @@ def test_ingest_otel_span_bad_type() -> None:
 
 def test_ingest_otel_span_malformed_attributes() -> None:
     """Edge Case: Sending a string instead of a dictionary for attributes."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         span_data = {
@@ -127,11 +127,11 @@ def test_ingest_otel_span_malformed_attributes() -> None:
 
 def test_ingest_otel_span_background_exception() -> None:
     """Edge Case: Ensure API returns 202 even if background task fails (mocked)."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
     # Simulate an error inside the ingestor
-    mock_ingestor.process_otel_span.side_effect = ValueError("Something exploded!")
+    mock_handler.process_span.side_effect = ValueError("Something exploded!")
 
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         span_data = {
@@ -158,8 +158,8 @@ def test_ingest_otel_span_background_exception() -> None:
 
 def test_complex_batch_ingestion() -> None:
     """Complex Scenario: Simulate a batch of 10 requests."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
-    app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
+    mock_handler = MagicMock(spec=OtelIngestionHandler)
+    app.dependency_overrides[get_otel_handler] = lambda: mock_handler
 
     try:
         batch_size = 10
@@ -177,6 +177,6 @@ def test_complex_batch_ingestion() -> None:
             assert response.json()["span_id"] == f"span_{i}"
 
         # Verify called 10 times
-        assert mock_ingestor.process_otel_span.call_count == batch_size
+        assert mock_handler.process_span.call_count == batch_size
     finally:
         app.dependency_overrides = {}

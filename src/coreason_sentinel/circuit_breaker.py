@@ -10,10 +10,8 @@
 
 from __future__ import annotations
 
-import math
 import random
 import time
-import uuid
 from datetime import datetime
 from enum import Enum
 
@@ -21,6 +19,7 @@ import numpy as np
 from redis import Redis
 
 from coreason_sentinel.interfaces import NotificationServiceProtocol
+from coreason_sentinel.metric_store import MetricStore
 from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
@@ -34,7 +33,7 @@ class CircuitBreakerState(str, Enum):
 class CircuitBreaker:
     """
     Manages the state of the Circuit Breaker for a specific agent.
-    Uses Redis for persistence to ensure stateless workers see the same state.
+    Delegates metric storage to MetricStore.
     """
 
     def __init__(
@@ -42,11 +41,14 @@ class CircuitBreaker:
         redis_client: Redis[bytes],
         config: SentinelConfig,
         notification_service: NotificationServiceProtocol,
+        metric_store: MetricStore | None = None,
     ):
         self.redis = redis_client
         self.config = config
         self.notification_service = notification_service
         self.agent_id = config.agent_id
+        # Allow injection of MetricStore, or default to creating one
+        self.metric_store = metric_store or MetricStore(redis_client)
         self._state_key = f"sentinel:breaker:{self.agent_id}:state"
         self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
 
@@ -128,36 +130,11 @@ class CircuitBreaker:
 
     def record_metric(self, metric_name: str, value: float = 1.0) -> None:
         """
-        Records a metric event into a Redis Sorted Set (Sliding Window).
-        The score is the timestamp, the member is "{timestamp}:{value}:{uuid}".
+        Records a metric event via the MetricStore.
+        Calculates retention window based on triggers.
         """
-        # Validate input (NaN/Inf check)
-        if not math.isfinite(value):
-            logger.warning(f"Ignoring invalid metric value: {value} for {metric_name}")
-            return
-
-        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
-        timestamp = time.time()
-        # Unique member to allow multiple events at same timestamp
-        member = f"{timestamp}:{value}:{uuid.uuid4()}"
-
-        try:
-            # Add event to sorted set
-            self.redis.zadd(key, {member: timestamp})
-
-            # Prune old metrics to prevent memory leak
-            max_window = 3600  # Default 1 hour
-            for t in self.config.triggers:
-                if t.metric == metric_name:
-                    max_window = max(max_window, t.window_seconds)
-
-            # Remove elements older than the window
-            min_score = timestamp - max_window
-            self.redis.zremrangebyscore(key, "-inf", min_score)
-
-            self.redis.expire(key, max_window * 2)
-        except Exception as e:
-            logger.error(f"Failed to record metric {metric_name}: {e}")
+        max_window = self.config.get_max_window_for_metric(metric_name)
+        self.metric_store.record_metric(self.agent_id, metric_name, value, retention_window=max_window)
 
     def check_triggers(self) -> None:
         """
@@ -170,11 +147,10 @@ class CircuitBreaker:
         if state == CircuitBreakerState.OPEN:
             return
 
-        now = time.time()
         violation = False
 
         for trigger in self.config.triggers:
-            if self._evaluate_trigger(trigger, now):
+            if self._evaluate_trigger(trigger):
                 reason = (
                     f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
                     f"in last {trigger.window_seconds}s"
@@ -191,23 +167,15 @@ class CircuitBreaker:
             logger.info(f"Circuit Breaker for {self.agent_id} recovering to CLOSED.")
             self.set_state(CircuitBreakerState.CLOSED)
 
-    def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
+    def _evaluate_trigger(self, trigger: CircuitBreakerTrigger) -> bool:
         """
         Returns True if the trigger condition is met (violation).
         """
-        key = f"sentinel:metrics:{self.agent_id}:{trigger.metric}"
-        start_time = now - trigger.window_seconds
-
         try:
-            # Get events within window
-            # zrangebyscore returns list of members
-            events = self.redis.zrangebyscore(key, start_time, "+inf")
-            if not events:
-                # If no events, we consider value 0.0 for SUM/COUNT, but for AVG/MIN/MAX it's undefined.
-                # Usually we don't trip if no data.
-                return False
+            values = self.metric_store.get_values_in_window(self.agent_id, trigger.metric, trigger.window_seconds)
 
-            values = [self._parse_value_from_member(m) for m in events]
+            if not values:
+                return False
 
             aggregated_value = 0.0
             if trigger.aggregation_method == "SUM":
@@ -244,20 +212,9 @@ class CircuitBreaker:
     def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
         """
         Retrieves the most recent raw values for a given metric.
-        Useful for statistical analysis (e.g., constructing distributions).
+        Delegates to MetricStore.
         """
-        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
-        try:
-            # Get the last `limit` elements from the sorted set
-            # zrevrange returns elements in descending order of score (newest first)
-            events = self.redis.zrevrange(key, 0, limit - 1)
-            if not events:
-                return []
-
-            return [self._parse_value_from_member(m) for m in events]
-        except Exception as e:
-            logger.error(f"Failed to fetch recent values for {metric_name}: {e}")
-            return []
+        return self.metric_store.get_recent_values(self.agent_id, metric_name, limit)
 
     def get_health_report(self) -> HealthReport:
         """
@@ -268,51 +225,21 @@ class CircuitBreaker:
 
         # Default metrics to aggregate
         # 1. Avg Latency (1h)
-        metrics["avg_latency"] = self._calculate_metric_average("latency", window_seconds=3600)
+        metrics["avg_latency"] = self.metric_store.calculate_average(self.agent_id, "latency", window_seconds=3600)
 
         # 2. Faithfulness (1h) - Average score
-        metrics["faithfulness"] = self._calculate_metric_average("faithfulness", window_seconds=3600)
+        metrics["faithfulness"] = self.metric_store.calculate_average(self.agent_id, "faithfulness", window_seconds=3600)
 
         # 3. Cost Per Query (1h) - Average cost per event
-        metrics["cost_per_query"] = self._calculate_metric_average("cost", window_seconds=3600)
+        metrics["cost_per_query"] = self.metric_store.calculate_average(self.agent_id, "cost", window_seconds=3600)
 
         # 4. KL Divergence (1h) - Average drift score
-        metrics["kl_divergence"] = self._calculate_metric_average("output_drift_kl", window_seconds=3600)
+        metrics["kl_divergence"] = self.metric_store.calculate_average(
+            self.agent_id, "output_drift_kl", window_seconds=3600
+        )
 
         return HealthReport(
             timestamp=datetime.fromtimestamp(time.time()),
             breaker_state=state.value,
             metrics=metrics,
         )
-
-    def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
-        """
-        Calculates the average value of a metric over the specified window.
-        Returns 0.0 if no data exists.
-        """
-        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
-        start_time = time.time() - window_seconds
-        try:
-            events = self.redis.zrangebyscore(key, start_time, "+inf")
-            if not events:
-                return 0.0
-
-            values = [self._parse_value_from_member(m) for m in events]
-
-            return sum(values) / len(values)
-        except Exception as e:
-            logger.error(f"Failed to calculate average for {metric_name}: {e}")
-            return 0.0
-
-    def _parse_value_from_member(self, member: bytes) -> float:
-        """
-        Extracts value from "{timestamp}:{value}:{uuid}" member string.
-        """
-        try:
-            s = member.decode("utf-8")
-            parts = s.split(":")
-            if len(parts) >= 2:
-                return float(parts[1])
-            return 1.0  # Default fallback
-        except (ValueError, IndexError):
-            return 1.0

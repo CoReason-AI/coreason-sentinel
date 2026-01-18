@@ -8,12 +8,14 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
-from typing import List, Union, cast
+from __future__ import annotations
+
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.distance import cosine
-from scipy.special import rel_entr
+from scipy.stats import entropy
 
 
 class DriftEngine:
@@ -23,7 +25,7 @@ class DriftEngine:
 
     @staticmethod
     def compute_cosine_similarity(
-        baseline: Union[List[float], NDArray[np.float64]], live: Union[List[float], NDArray[np.float64]]
+        baseline: list[float] | NDArray[np.float64], live: list[float] | NDArray[np.float64]
     ) -> float:
         """
         Computes the Cosine Similarity between two vectors.
@@ -43,21 +45,24 @@ class DriftEngine:
             raise ValueError(f"Vectors must have same dimension. Got {u.shape} and {v.shape}")
 
         # Check for zero vectors to avoid division by zero in internal calculation
-        if np.all(u == 0) or np.all(v == 0):
-            # Similarity is undefined or 0 for zero vectors depending on definition.
-            # Usually we return 0.0 if one is zero and other is not, or 1.0 if both are zero?
-            # Let's assume 0.0 for safety if undefined.
-            if np.all(u == 0) and np.all(v == 0):
-                return 1.0  # Both are "nothing", so identical?
+        u_is_zero = np.all(u == 0)
+        v_is_zero = np.all(v == 0)
+
+        if u_is_zero or v_is_zero:
+            # If both are zero, they are identical (similarity 1.0)
+            if u_is_zero and v_is_zero:
+                return 1.0
+            # If one is zero and the other is not, they are orthogonal (similarity 0.0)
             return 0.0
 
+        # scipy.spatial.distance.cosine returns 1 - (u . v) / (||u|| ||v||)
         distance = cosine(u, v)
         return float(1.0 - distance)
 
     @staticmethod
     def compute_kl_divergence(
-        baseline: Union[List[float], NDArray[np.float64]],
-        live: Union[List[float], NDArray[np.float64]],
+        baseline: list[float] | NDArray[np.float64],
+        live: list[float] | NDArray[np.float64],
         epsilon: float = 1e-10,
     ) -> float:
         """
@@ -88,19 +93,16 @@ class DriftEngine:
         p = p / np.sum(p)
         q = q / np.sum(q)
 
-        # scipy.special.rel_entr computes element-wise P * log(P/Q)
-        # Summing it gives KL Divergence
-        return float(np.sum(rel_entr(p, q)))
+        # Use scipy.stats.entropy for efficient calculation
+        # entropy(pk, qk) calculates S = sum(pk * log(pk / qk))
+        return float(entropy(p, q))
 
     @classmethod
-    def detect_vector_drift(cls, baseline_batch: List[List[float]], live_batch: List[List[float]]) -> float:
+    def detect_vector_drift(cls, baseline_batch: list[list[float]], live_batch: list[list[float]]) -> float:
         """
         Detects drift between a batch of baseline vectors and a batch of live vectors.
-        This is a simplification. In reality, we might compare the centroid of live batch
-        to the centroid of baseline batch, or average pairwise distance.
-
-        For this implementation: We compute the Cosine Similarity between the
-        CENTROID (mean) of the baseline batch and the CENTROID of the live batch.
+        Computes the Cosine Similarity between the CENTROID (mean) of the baseline batch
+        and the CENTROID of the live batch.
 
         Returns:
             drift_magnitude: 1.0 - similarity.
@@ -127,18 +129,11 @@ class DriftEngine:
 
         similarity = cls.compute_cosine_similarity(baseline_centroid, live_centroid)
 
-        # Convert similarity to a drift metric (Distance)
-        # If similarity is 1.0, drift is 0.0
-        # If similarity is 0.0, drift is 1.0
-        # If similarity is -1.0, drift is 2.0 (but usually we care about distance 0-1 range for cosine distance)
-        # Scipy cosine returns 0 to 2.
-
-        # Re-using scipy cosine distance logic:
         # Distance = 1 - Similarity
         return 1.0 - similarity
 
     @classmethod
-    def compute_relevance_drift(cls, query_embedding: List[float], response_embedding: List[float]) -> float:
+    def compute_relevance_drift(cls, query_embedding: list[float], response_embedding: list[float]) -> float:
         """
         Computes the Relevance Drift between a Query and a Response using Cosine Distance.
         Relevance Drift = 1.0 - Cosine Similarity.
@@ -156,7 +151,7 @@ class DriftEngine:
         return 1.0 - similarity
 
     @staticmethod
-    def compute_distribution_from_samples(samples: List[float], bin_edges: List[float]) -> List[float]:
+    def compute_distribution_from_samples(samples: list[float], bin_edges: list[float]) -> list[float]:
         """
         Converts a list of raw samples into a probability distribution (PMF)
         based on the provided bin edges.
@@ -168,27 +163,18 @@ class DriftEngine:
                        Length must be len(output_distribution) + 1.
 
         Returns:
-            List[float]: Probability of samples falling into each bin.
+            list[float]: Probability of samples falling into each bin.
         """
         if not samples:
-            # If no samples, return a uniform distribution or zeros?
-            # Returning zeros might cause KL issues, but compute_kl_divergence handles epsilon.
-            # However, standard practice is uniform or raising error.
-            # Let's return zeros, relying on KL smoothing.
+            # Return zeros, relying on KL smoothing (epsilon) later.
             return [0.0] * (len(bin_edges) - 1)
 
-        hist, _ = np.histogram(samples, bins=bin_edges, density=True)
-        # np.histogram with density=True returns the value of the probability density function at the bin,
-        # normalized such that the integral over the range is 1.
-        # However, for discrete PMF comparison (KL), we often want the *probability mass* (sum(p)=1).
-        # If bins are not unit width, density values != probabilities.
-        # KL expects P and Q to sum to 1.
-        # Let's use simple counts and normalize manually to be safe.
-
+        # Use histogram to count samples in bins
         counts, _ = np.histogram(samples, bins=bin_edges)
         total = np.sum(counts)
+
         if total == 0:
             return [0.0] * (len(bin_edges) - 1)
 
         probabilities = counts / total
-        return cast(List[float], probabilities.tolist())
+        return cast(list[float], probabilities.tolist())

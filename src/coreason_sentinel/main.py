@@ -12,21 +12,19 @@ from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI
 
-from coreason_sentinel.ingestor import TelemetryIngestor
+from coreason_sentinel.handlers.otel_handler import OtelIngestionHandler
 from coreason_sentinel.interfaces import OTELSpan
 from coreason_sentinel.utils.logger import logger
 
 app = FastAPI(title="CoReason Sentinel", version="0.1.0")
 
 
-def get_telemetry_ingestor() -> TelemetryIngestor:
+def get_otel_handler() -> OtelIngestionHandler:
     """
-    Dependency to provide the TelemetryIngestor instance.
-    In a real deployment, this would initialize the full object graph
-    (Redis, Veritas Client, etc.) based on configuration.
-    For now, it raises NotImplementedError to ensure tests override it.
+    Dependency to provide the OtelIngestionHandler instance.
+    Must be overridden in tests.
     """
-    raise NotImplementedError("TelemetryIngestor dependency must be overridden.")
+    raise NotImplementedError("OtelIngestionHandler dependency must be overridden.")
 
 
 @app.get("/health")  # type: ignore[misc]
@@ -38,12 +36,12 @@ def health_check() -> dict[str, str]:
 def ingest_otel_span(
     span: OTELSpan,
     background_tasks: BackgroundTasks,
-    ingestor: Annotated[TelemetryIngestor, Depends(get_telemetry_ingestor)],
+    handler: Annotated[OtelIngestionHandler, Depends(get_otel_handler)],
 ) -> dict[str, str]:
     """
     Ingests a single OpenTelemetry span.
     Processing is offloaded to a background task.
     """
     logger.info(f"Received OTEL span: {span.span_id}")
-    background_tasks.add_task(ingestor.process_otel_span, span)
+    background_tasks.add_task(handler.process_span, span)
     return {"status": "accepted", "span_id": span.span_id}
