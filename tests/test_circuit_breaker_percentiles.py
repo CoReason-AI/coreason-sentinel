@@ -282,7 +282,7 @@ def test_percentile_numpy_error(
     trigger.metric = "latency"
     trigger.threshold = 10.0
     trigger.window_seconds = 60
-    trigger.aggregation_method = "P101" # Invalid percentile > 100
+    trigger.aggregation_method = "P101"  # Invalid percentile > 100
     trigger.operator = ">"
 
     basic_config.triggers = [trigger]

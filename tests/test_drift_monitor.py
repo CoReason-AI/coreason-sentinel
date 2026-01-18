@@ -207,7 +207,9 @@ class TestDriftMonitor(unittest.TestCase):
     def test_check_output_drift_baseline_error(self) -> None:
         """Test handling of NotImplementedError from provider."""
         self.event.metrics = {"completion_tokens": 100}
-        self.mock_baseline_provider.get_baseline_output_length_distribution.side_effect = NotImplementedError("Not supported")
+        self.mock_baseline_provider.get_baseline_output_length_distribution.side_effect = NotImplementedError(
+            "Not supported"
+        )
 
         self.monitor._check_output_drift(self.event)
         # Should catch and log debug
