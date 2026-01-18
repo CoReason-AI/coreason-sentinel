@@ -301,17 +301,16 @@ def test_circuit_breaker_percentile_block_explicit(
     Ensure the percentile calculation block is entered and executed with mocked non-empty values.
     Targets lines 208-210 in circuit_breaker.py explicitly.
     """
-    trigger = CircuitBreakerTrigger(
-        metric="latency", threshold=1.0, window_seconds=60, aggregation_method="P50"
-    )
+    trigger = CircuitBreakerTrigger(metric="latency", threshold=1.0, window_seconds=60, aggregation_method="P50")
     basic_config.triggers = [trigger]
 
     # Pre-populate MockRedis with data so MetricStore returns values
     # MetricStore uses: timestamp:value:uuid
     import time
+
     now = time.time()
-    mock_redis.zadd(f"sentinel:metrics:test_agent:latency", {f"{now}:5.0:uuid1".encode("utf-8"): now})
-    mock_redis.zadd(f"sentinel:metrics:test_agent:latency", {f"{now}:10.0:uuid2".encode("utf-8"): now})
+    mock_redis.zadd("sentinel:metrics:test_agent:latency", {f"{now}:5.0:uuid1".encode("utf-8"): now})
+    mock_redis.zadd("sentinel:metrics:test_agent:latency", {f"{now}:10.0:uuid2".encode("utf-8"): now})
 
     cb = CircuitBreaker(mock_redis, basic_config, mock_notification_service)
 
