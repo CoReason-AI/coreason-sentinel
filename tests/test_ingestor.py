@@ -53,6 +53,51 @@ class TestTelemetryIngestor(unittest.TestCase):
             metadata={"user_tier": "free"},
         )
 
+    def test_ingest_from_veritas_triggers_drift_logic(self) -> None:
+        """
+        Verifies that ingest_from_veritas_since triggers process_drift,
+        resulting in drift metrics being recorded.
+        """
+        # Setup Event with Embeddings
+        event = VeritasEvent(
+            event_id="evt_drift_check",
+            timestamp=datetime.now(timezone.utc),
+            agent_id="test-agent",
+            session_id="sess_1",
+            input_text="Hello",
+            output_text="World",
+            metrics={"latency": 0.1},
+            metadata={
+                "query_embedding": [0.1, 0.2],
+                "response_embedding": [0.1, 0.25],
+                "embedding": [0.1, 0.2],  # Vector drift embedding
+            },
+        )
+
+        # Mock Veritas to return this event
+        self.mock_veritas.fetch_logs.return_value = [event]
+
+        # Mock Baseline Provider to return valid baselines so drift calc proceeds
+        self.mock_bp.get_baseline_vectors.return_value = [[0.1, 0.2]]
+
+        # Run Ingestion
+        count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+
+        self.assertEqual(count, 1)
+
+        # Assertions
+        # 1. Verify Metrics from process_event are recorded (latency)
+        self.mock_cb.record_metric.assert_any_call("latency", 0.1)
+
+        # 2. Verify Drift Metrics are recorded
+        calls = [call.args[0] for call in self.mock_cb.record_metric.call_args_list]
+
+        if "relevance_drift" not in calls:
+            self.fail("relevance_drift metric was NOT recorded. Drift detection is not wired up.")
+
+        if "vector_drift" not in calls:
+            self.fail("vector_drift metric was NOT recorded.")
+
     def test_ingest_from_veritas_since_success(self) -> None:
         """Test fetching and processing logs from Veritas."""
         since_time = datetime.now(timezone.utc)
@@ -63,9 +108,11 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         self.mock_veritas.fetch_logs.assert_called_with("test-agent", since_time)
         self.assertEqual(count, 2)
-        # Should have called process_event 2 times
-        # Since process_event calls check_triggers, it should be called 2 times.
-        self.assertEqual(self.mock_cb.check_triggers.call_count, 2)
+        # check_triggers is called by process_event AND process_drift
+        # process_event calls check_triggers at the end.
+        # process_drift calls check_triggers at the end.
+        # Total per event = 2. Total for 2 events = 4.
+        self.assertEqual(self.mock_cb.check_triggers.call_count, 4)
 
     def test_ingest_from_veritas_since_empty(self) -> None:
         """Test fetching no logs from Veritas."""
@@ -129,14 +176,17 @@ class TestTelemetryIngestor(unittest.TestCase):
         count = self.ingestor.ingest_from_veritas_since(since_time)
 
         self.assertEqual(count, 3)
-        self.assertEqual(self.mock_cb.check_triggers.call_count, 3)
+        # check_triggers called 2x per event (process_event + process_drift)
+        self.assertEqual(self.mock_cb.check_triggers.call_count, 6)
 
         # Expected Metrics per event:
-        # 1. latency
-        # 2. tokens
-        # Drift is NO LONGER called in process_event
-        # So only 2 metrics per event = 6 total
-        self.assertEqual(self.mock_cb.record_metric.call_count, 6)
+        # process_event: 1. latency, 2. tokens
+        # process_drift: 1. output_length (even if drift calc fails, output_length is recorded in _process_output_drift)
+        # Total = 3 metrics per event * 3 events = 9 calls?
+        # Wait, _process_output_drift might fail if mocks aren't right, or might record 'output_length'.
+        # Let's check logic: _process_output_drift calls record_metric("output_length", ...) BEFORE fetching baseline.
+        # So yes, 3 metrics per event.
+        self.assertEqual(self.mock_cb.record_metric.call_count, 9)
 
     def test_process_event_records_metrics(self) -> None:
         """Test that event metrics are sent to CircuitBreaker."""
