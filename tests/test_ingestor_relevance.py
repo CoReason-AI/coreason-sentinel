@@ -49,7 +49,7 @@ class TestIngestorRelevanceDrift:
             metadata={"query_embedding": [1.0, 0.0], "response_embedding": [0.0, 1.0]},
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Verify relevance_drift was recorded
         # Orthogonal vectors -> Drift 1.0
@@ -72,7 +72,7 @@ class TestIngestorRelevanceDrift:
             },
         )
 
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Should not record relevance_drift
         calls = [call.args[0] for call in breaker.record_metric.call_args_list]
@@ -98,7 +98,7 @@ class TestIngestorRelevanceDrift:
         )
 
         # Should not raise exception
-        ingestor.process_event(event)
+        ingestor.process_drift(event)
 
         # Should not record relevance_drift
         calls = [call.args[0] for call in breaker.record_metric.call_args_list]

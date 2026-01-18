@@ -49,7 +49,7 @@ class TestTelemetryIngestor(unittest.TestCase):
             session_id="sess-1",
             input_text="hello",
             output_text="world",
-            metrics={"latency": 100, "tokens": 50},
+            metrics={"latency": 100, "token_count": 50},
             metadata={"user_tier": "free"},
         )
 
@@ -122,29 +122,9 @@ class TestTelemetryIngestor(unittest.TestCase):
         Complex Scenario: 'Batch Trip'.
         A batch of events where early events cause a trip, but processing continues.
         """
-        # We mock Circuit Breaker state behavior.
-        # Event 1: Normal.
-        # Event 2: Trips Breaker.
-        # Event 3: Breaker is OPEN.
-
         since_time = datetime.now(timezone.utc)
         events = [self.event, self.event, self.event]
         self.mock_veritas.fetch_logs.return_value = events
-
-        # Prevent drift detection crash
-        self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
-        # Prevent "no recent samples" return
-        self.mock_cb.get_recent_values.return_value = [10.0]
-
-        # We need check_triggers to simulate tripping on 2nd call.
-        # And check state behavior?
-        # TelemetryIngestor just calls check_triggers().
-        # We want to ensure that even if breaker trips (check_triggers might log or whatever),
-        # the ingestor CONTINUES to process event 3 and call record_metric.
-
-        # Let's track calls to record_metric.
-        # If check_triggers raises exception (it shouldn't), loop might break.
-        # But let's assume check_triggers is safe.
 
         count = self.ingestor.ingest_from_veritas_since(since_time)
 
@@ -154,10 +134,9 @@ class TestTelemetryIngestor(unittest.TestCase):
         # Expected Metrics per event:
         # 1. latency
         # 2. tokens
-        # 3. output_length (from _process_output_drift)
-        # 4. output_drift_kl (from _process_output_drift, since mocks valid)
-        # Total 4 per event * 3 events = 12
-        self.assertEqual(self.mock_cb.record_metric.call_count, 12)
+        # Drift is NO LONGER called in process_event
+        # So only 2 metrics per event = 6 total
+        self.assertEqual(self.mock_cb.record_metric.call_count, 6)
 
     def test_process_event_records_metrics(self) -> None:
         """Test that event metrics are sent to CircuitBreaker."""
@@ -166,7 +145,7 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         # Check record_metric calls
         self.mock_cb.record_metric.assert_any_call("latency", 100.0)
-        self.mock_cb.record_metric.assert_any_call("tokens", 50.0)
+        self.mock_cb.record_metric.assert_any_call("token_count", 50.0)
         # Check trigger evaluation - called ONCE at the end
         self.mock_cb.check_triggers.assert_called_once()
 
@@ -195,78 +174,101 @@ class TestTelemetryIngestor(unittest.TestCase):
         self.ingestor.process_event(self.event)
 
         # Verify no grade metrics recorded
-        # We need to ensure record_metric was NOT called with score keys
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("faithfulness_score", calls)
 
     @patch("coreason_sentinel.ingestor.DriftEngine.detect_vector_drift")
-    def test_drift_detection(self, mock_detect_drift: MagicMock) -> None:
-        """Test drift detection flow when embedding is present."""
-        self.mock_sc.should_sample.return_value = False  # Ensure no sampling triggers
+    def test_process_event_does_not_call_drift(self, mock_detect_drift: MagicMock) -> None:
+        """Test that process_event does NOT call drift detection anymore."""
+        self.mock_sc.should_sample.return_value = False
 
+        embedding = [0.1, 0.2, 0.3]
+        self.event.metadata["embedding"] = embedding
+
+        self.ingestor.process_event(self.event)
+
+        self.mock_bp.get_baseline_vectors.assert_not_called()
+        mock_detect_drift.assert_not_called()
+
+        # Also ensure Output drift logic is skipped (checking metric)
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertNotIn("vector_drift", calls)
+        self.assertNotIn("output_length", calls)
+
+    @patch("coreason_sentinel.ingestor.DriftEngine.detect_vector_drift")
+    def test_process_drift_vector(self, mock_detect_drift: MagicMock) -> None:
+        """Test that process_drift calls vector drift logic."""
         embedding = [0.1, 0.2, 0.3]
         baseline = [[0.1, 0.2, 0.3]]
         self.event.metadata["embedding"] = embedding
         self.mock_bp.get_baseline_vectors.return_value = baseline
         mock_detect_drift.return_value = 0.5
 
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
 
         self.mock_bp.get_baseline_vectors.assert_called_with("test-agent")
         mock_detect_drift.assert_called_with(baseline, [embedding])
         self.mock_cb.record_metric.assert_any_call("vector_drift", 0.5)
-        # Check triggers called ONCE at the end
-        self.mock_cb.check_triggers.assert_called_once()
+
+    def test_process_drift_output(self) -> None:
+        """Test that process_drift calls output drift logic."""
+        # Setup mocks for output drift
+        self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
+        self.mock_cb.get_recent_values.return_value = [10.0]
+
+        self.ingestor.process_drift(self.event)
+
+        # Verify output_length recorded
+        # event metrics had "tokens": 50. If output_drift checks "completion_tokens" or "token_count" (50).
+        self.mock_cb.record_metric.assert_any_call("output_length", 50.0)
+        # Verify KL recorded (assuming DriftEngine works)
+        calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
+        self.assertIn("output_drift_kl", calls)
+
+    def test_process_drift_relevance(self) -> None:
+        """Test that process_drift calls relevance drift logic."""
+        self.event.metadata["query_embedding"] = [1.0]
+        self.event.metadata["response_embedding"] = [1.0]
+
+        self.ingestor.process_drift(self.event)
+
+        self.mock_cb.record_metric.assert_any_call("relevance_drift", 0.0)
 
     def test_drift_detection_exception(self) -> None:
-        """Test error handling in drift detection."""
-        self.mock_sc.should_sample.return_value = False
+        """Test error handling in drift detection (process_drift)."""
         self.event.metadata["embedding"] = [0.1]
         # Simulate exception
         self.mock_bp.get_baseline_vectors.side_effect = Exception("DB Error")
 
         # Should not raise exception
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
         # And should log error (implicitly covered by execution flow)
 
     def test_drift_detection_no_embedding(self) -> None:
         """Test drift detection skipped when no embedding."""
         self.event.metadata = {}  # No embedding
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
         self.mock_bp.get_baseline_vectors.assert_not_called()
 
     def test_drift_detection_no_baseline(self) -> None:
         """Test drift detection skipped when no baseline."""
         self.event.metadata["embedding"] = [0.1]
         self.mock_bp.get_baseline_vectors.return_value = []
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
         # drift detection not called
-        # checking record_metric not called with vector_drift
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("vector_drift", calls)
 
     def test_drift_dimension_mismatch(self) -> None:
-        """
-        Test behavior when embedding dimension mismatches baseline.
-        DriftEngine would raise ValueError, which should be caught.
-        """
-        self.mock_sc.should_sample.return_value = False
+        """Test behavior when embedding dimension mismatches baseline."""
         embedding = [0.1, 0.2]  # 2D
         baseline = [[0.1, 0.2, 0.3]]  # 3D
         self.event.metadata["embedding"] = embedding
         self.mock_bp.get_baseline_vectors.return_value = baseline
 
-        # Use the REAL DriftEngine (not patched) to verify it raises ValueError and we catch it.
-        # But we need to ensure the DriftEngine is importable and works.
-        # Since we patched it in other tests, here we rely on the implementation in src.
-        # However, the class `DriftEngine` is used in `ingestor.py`.
-        # To test the `try...except` block in `ingestor.py` specifically catching ValueError from DriftEngine:
-
-        # We can just let the real DriftEngine run.
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
 
         # Should not raise.
-        # Should NOT have recorded vector_drift.
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("vector_drift", calls)
 
@@ -274,7 +276,7 @@ class TestTelemetryIngestor(unittest.TestCase):
         """
         Complex Scenario: 'Drift Storm'.
         High vector drift causes Circuit Breaker to trip.
-        Validates full flow: Event -> Embedding -> Drift Calc -> Metric -> Trigger.
+        Validates full flow using process_drift.
         """
         from redis import Redis
 
@@ -332,8 +334,6 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis.get.side_effect = mock_get
 
         # Feed events with Orthogonal embeddings (Unit vector on Y axis)
-        # Cosine Similarity (1,0) . (0,1) = 0.
-        # Drift = 1 - 0 = 1.0.
         event = VeritasEvent(
             event_id="evt-drift",
             timestamp=datetime.now(timezone.utc),
@@ -349,7 +349,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis.getset.return_value = b"CLOSED"
 
         for _ in range(3):
-            ingestor.process_event(event)
+            # MUST CALL process_drift
+            ingestor.process_drift(event)
 
         # Drift scores recorded: 1.0, 1.0, 1.0
         # Avg: 1.0.
@@ -362,7 +363,7 @@ class TestTelemetryIngestor(unittest.TestCase):
         """
         Story B: The 'Hallucination Storm'.
         Simulates a sequence where low faithfulness scores trigger the Circuit Breaker.
-        NOTE: This test uses REAL Logic classes with MOCKED Redis/Grader to verify the integration logic.
+        NOTE: This test uses REAL Logic classes with MOCKED Redis/Grader.
         """
         # 1. Setup Logic with Mocks
         from redis import Redis
@@ -397,26 +398,21 @@ class TestTelemetryIngestor(unittest.TestCase):
         ingestor = TelemetryIngestor(config, real_cb, real_sc, mock_bp, mock_veritas)
 
         # 2. Simulate "Bad" Traffic (Mock Redis Storage)
-
-        # State var to hold our "Redis" data: {key: [(score, member_bytes)]}
         redis_store: Dict[str, List[Tuple[float, bytes]]] = {}
 
         def mock_zadd(key: str, mapping: Dict[Union[str, bytes], float]) -> None:
-            # mapping is {member: score}
             if key not in redis_store:
                 redis_store[key] = []
             for m, s in mapping.items():
                 redis_store[key].append((s, m if isinstance(m, bytes) else m.encode("utf-8")))
 
         def mock_zrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> List[bytes]:
-            # Return list of members for THIS key
-            # Also mock pruning? For this test we don't prune, just append.
             if key not in redis_store:
                 return []
             return [m for s, m in redis_store[key]]
 
         def mock_zremrange(key: str, min_s: Union[float, str], max_s: Union[float, str]) -> None:
-            pass  # No-op for test
+            pass
 
         def mock_get(key: str) -> bytes:
             return b"CLOSED"
@@ -427,51 +423,37 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis.get.side_effect = mock_get
 
         # 3. Process Events
-        # Grader returns 0.1 (Low faithfulness).
         mock_grader.grade_conversation.return_value = GradeResult(faithfulness_score=0.1, safety_score=1.0, details={})
-
-        # Mock getset to return CLOSED so the breaker actually trips
         mock_redis.getset.return_value = b"CLOSED"
 
-        # Send 5 events.
-        # faithfulness_score accumulator: 0.1, 0.1, ...
-        # AVG will be 0.1.
-        # Threshold: 0.5. Operator: <.
-        # 0.1 < 0.5 is TRUE. Violation!
         for _i in range(5):
             ingestor.process_event(self.event)
 
-        # Verify set_state("OPEN") was called.
         mock_redis.getset.assert_any_call("sentinel:breaker:storm-agent:state", "OPEN")
 
     def test_output_drift_missing_methods(self) -> None:
-        """Test graceful handling when provider is missing distribution methods."""
-        # Provider raises AttributeError
+        """Test graceful handling when provider is missing distribution methods (process_drift)."""
         self.mock_bp.get_baseline_output_length_distribution.side_effect = AttributeError("Old Provider")
-        self.mock_sc.should_sample.return_value = False
 
-        # Should not crash
-        self.ingestor.process_event(self.event)
+        # Use process_drift
+        self.ingestor.process_drift(self.event)
 
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("output_drift_kl", calls)
 
     def test_output_drift_empty_baseline(self) -> None:
-        """Test graceful handling of empty baseline."""
+        """Test graceful handling of empty baseline (process_drift)."""
         self.mock_bp.get_baseline_output_length_distribution.return_value = ([], [])
-        self.mock_sc.should_sample.return_value = False
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("output_drift_kl", calls)
 
     def test_output_drift_no_recent_samples(self) -> None:
-        """Test graceful handling when no recent samples in Redis."""
+        """Test graceful handling when no recent samples in Redis (process_drift)."""
         self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
-        self.mock_sc.should_sample.return_value = False
-        # Redis returns empty list for get_recent_values
         self.mock_cb.get_recent_values.return_value = []
 
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
 
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("output_drift_kl", calls)
@@ -480,28 +462,22 @@ class TestTelemetryIngestor(unittest.TestCase):
     def test_output_drift_kl_error(self, mock_kl: MagicMock) -> None:
         """Test handling of KL computation error."""
         self.mock_bp.get_baseline_output_length_distribution.return_value = ([0.5, 0.5], [0, 10, 20])
-        self.mock_sc.should_sample.return_value = False
         self.mock_cb.get_recent_values.return_value = [5.0, 15.0]
 
         mock_kl.side_effect = ValueError("KL Error")
 
-        self.ingestor.process_event(self.event)
+        self.ingestor.process_drift(self.event)
 
         # Should log warning but continue
+        # Triggers checked
         self.mock_cb.check_triggers.assert_called_once()
 
     @patch("coreason_sentinel.ingestor.logger")
     def test_output_drift_general_exception(self, mock_logger: MagicMock) -> None:
         """Test catching unexpected exception in drift logic."""
-        # Patch the method on the instance directly to ensure it raises
         with patch.object(self.ingestor, "_process_output_drift", side_effect=Exception("Boom")) as mock_method:
-            self.mock_sc.should_sample.return_value = False
-
-            self.ingestor.process_event(self.event)
-
-            # Verify the mock was called
+            self.ingestor.process_drift(self.event)
             mock_method.assert_called_once()
-            # Verify logger error was called
             mock_logger.error.assert_called_with("Failed to process output drift detection: Boom")
 
     def test_extract_refusal_metric(self) -> None:
@@ -515,7 +491,6 @@ class TestTelemetryIngestor(unittest.TestCase):
 
     def test_extract_sentiment_metric(self) -> None:
         """Test that configured regex patterns trigger sentiment metric."""
-        # Default config has "STOP"
         self.event.input_text = "Please STOP this now."
         self.mock_sc.should_sample.return_value = False
 
@@ -540,22 +515,18 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         self.ingestor.process_event(self.event)
 
-        # Ensure sentiment metric was NOT recorded
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("sentiment_frustration_count", calls)
 
     @patch("coreason_sentinel.ingestor.logger")
     def test_extract_sentiment_invalid_regex(self, mock_logger: MagicMock) -> None:
         """Test that invalid regex patterns are handled gracefully."""
-        self.config.sentiment_regex_patterns = ["[", "STOP"]  # First invalid, second valid
+        self.config.sentiment_regex_patterns = ["[", "STOP"]
         self.event.input_text = "Please STOP"
         self.mock_sc.should_sample.return_value = False
 
         self.ingestor.process_event(self.event)
 
-        # Verify invalid regex logged error
-        # The error message varies by Python version ("unterminated character set" vs "bad character range")
-        # We check that the start of the message is correct.
         found_call = False
         for call_args in mock_logger.error.call_args_list:
             arg = call_args[0][0]
@@ -564,7 +535,6 @@ class TestTelemetryIngestor(unittest.TestCase):
                 break
         self.assertTrue(found_call, "Did not find expected error log for invalid regex")
 
-        # Verify valid pattern still worked
         self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
 
     def test_extract_sentiment_empty_input(self) -> None:
@@ -572,7 +542,6 @@ class TestTelemetryIngestor(unittest.TestCase):
         self.event.input_text = ""
         self.mock_sc.should_sample.return_value = False
         self.ingestor.process_event(self.event)
-        # Should not record metric
         calls = [c[0][0] for c in self.mock_cb.record_metric.call_args_list]
         self.assertNotIn("sentiment_frustration_count", calls)
 
@@ -597,14 +566,12 @@ class TestTelemetryIngestor(unittest.TestCase):
 
     def test_extract_overlapping_regex(self) -> None:
         """Test that multiple matching regexes only record ONE metric per event."""
-        # Both "STOP" and "BAD" match
         self.config.sentiment_regex_patterns = ["STOP", "BAD"]
         self.event.input_text = "STOP being BAD"
         self.mock_sc.should_sample.return_value = False
 
         self.ingestor.process_event(self.event)
 
-        # Verify only ONE sentiment call (plus latency/tokens)
         sentiment_calls = [
             c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "sentiment_frustration_count"
         ]
@@ -614,12 +581,10 @@ class TestTelemetryIngestor(unittest.TestCase):
         """
         Scenario: 'The Meltdown'.
         Simulates a stream of events with high refusal and frustration rates.
-        Verifies that metrics are consistently recorded.
         """
         self.config.sentiment_regex_patterns = ["FAIL"]
         self.mock_sc.should_sample.return_value = False
 
-        # 10 events: 5 refusals, 5 frustration, 3 overlapping
         events = []
         for i in range(10):
             evt = VeritasEvent(
@@ -630,20 +595,17 @@ class TestTelemetryIngestor(unittest.TestCase):
                 input_text="System FAIL" if i < 5 else "Normal request",
                 output_text="...",
                 metrics={},
-                metadata={"is_refusal": i >= 3},  # Refusals for i=3..9 (7 total actually)
+                metadata={"is_refusal": i >= 3},
             )
             events.append(evt)
 
         for evt in events:
             self.ingestor.process_event(evt)
 
-        # Verification
-        # Sentiment: i=0,1,2,3,4 -> 5 calls
         sentiment_calls = [
             c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "sentiment_frustration_count"
         ]
         self.assertEqual(len(sentiment_calls), 5)
 
-        # Refusals: i=3..9 -> 7 calls
         refusal_calls = [c for c in self.mock_cb.record_metric.call_args_list if c[0][0] == "refusal_count"]
         self.assertEqual(len(refusal_calls), 7)
