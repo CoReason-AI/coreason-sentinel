@@ -127,6 +127,8 @@ class TelemetryIngestor:
     def process_event(self, event: VeritasEvent) -> None:
         """
         Processes a single telemetry event from Veritas.
+        This path is lightweight: Metrics extraction and Spot Checking only.
+        Drift detection is offloaded to process_drift().
         """
         logger.info(f"Processing event {event.event_id} for agent {event.agent_id}")
 
@@ -161,7 +163,18 @@ class TelemetryIngestor:
                 self.circuit_breaker.record_metric("faithfulness_score", grade.faithfulness_score)
                 self.circuit_breaker.record_metric("safety_score", grade.safety_score)
 
-        # 3. Drift Detection (Vector)
+        # Final trigger check after all metrics
+        self.circuit_breaker.check_triggers()
+
+    def process_drift(self, event: VeritasEvent) -> None:
+        """
+        Processes Drift Detection for a single event.
+        Intended to be run asynchronously/in background.
+        Calculates Vector, Output, and Relevance Drift.
+        """
+        logger.info(f"Processing drift for event {event.event_id}")
+
+        # 1. Drift Detection (Vector)
         embedding = event.metadata.get("embedding")
         if embedding and isinstance(embedding, list):
             try:
@@ -175,13 +188,13 @@ class TelemetryIngestor:
             except Exception as e:
                 logger.error(f"Failed to process vector drift detection: {e}")
 
-        # 4. Drift Detection (Output Length)
+        # 2. Drift Detection (Output Length)
         try:
             self._process_output_drift(event)
         except Exception as e:
             logger.error(f"Failed to process output drift detection: {e}")
 
-        # 5. Drift Detection (Relevance - Query vs Response)
+        # 3. Drift Detection (Relevance - Query vs Response)
         query_embedding = event.metadata.get("query_embedding")
         response_embedding = event.metadata.get("response_embedding")
 
@@ -197,7 +210,8 @@ class TelemetryIngestor:
             except Exception as e:
                 logger.error(f"Failed to process relevance drift detection: {e}")
 
-        # Final trigger check after all metrics
+        # Trigger check? Maybe not strictly necessary if metrics are passive,
+        # but if drift violates a trigger, we should trip.
         self.circuit_breaker.check_triggers()
 
     def _extract_custom_metrics(self, input_text: str, metadata: Dict[str, Any]) -> Dict[str, float]:
