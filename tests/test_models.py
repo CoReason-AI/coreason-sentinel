@@ -12,13 +12,12 @@ import json
 from datetime import datetime, timezone
 
 import pytest
-from pydantic import ValidationError
-
 from coreason_sentinel.models import (
     CircuitBreakerTrigger,
     HealthReport,
     SentinelConfig,
 )
+from pydantic import ValidationError
 
 
 def test_trigger_creation() -> None:

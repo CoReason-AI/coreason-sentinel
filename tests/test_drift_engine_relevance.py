@@ -9,7 +9,6 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 import pytest
-
 from coreason_sentinel.drift_engine import DriftEngine
 
 

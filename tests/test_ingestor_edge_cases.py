@@ -10,7 +10,6 @@
 
 import unittest
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple, Union
 from unittest.mock import MagicMock, patch
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
@@ -52,9 +51,7 @@ class TestIngestorEdgeCases(unittest.TestCase):
 
     @patch("coreason_sentinel.ingestor.DriftEngine.detect_vector_drift")
     @patch("coreason_sentinel.ingestor.logger")
-    def test_process_drift_partial_failures(
-        self, mock_logger: MagicMock, mock_detect_vector: MagicMock
-    ) -> None:
+    def test_process_drift_partial_failures(self, mock_logger: MagicMock, mock_detect_vector: MagicMock) -> None:
         """
         Verify that if Vector Drift detection fails, Output and Relevance Drift still run.
         """

@@ -10,9 +10,6 @@
 
 import unittest
 
-import numpy as np
-import pytest
-
 from coreason_sentinel.drift_engine import DriftEngine
 
 

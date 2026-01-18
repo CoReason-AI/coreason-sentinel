@@ -12,7 +12,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 

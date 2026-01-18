@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, Mock
 
 import numpy as np
 import pytest
-
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
 from coreason_sentinel.ingestor import TelemetryIngestor

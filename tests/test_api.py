@@ -13,10 +13,9 @@ import uuid
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
-
 from coreason_sentinel.ingestor import TelemetryIngestor
 from coreason_sentinel.main import app, get_telemetry_ingestor
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

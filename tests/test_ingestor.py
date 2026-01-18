@@ -278,9 +278,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         High vector drift causes Circuit Breaker to trip.
         Validates full flow using process_drift.
         """
-        from redis import Redis
-
         from coreason_sentinel.interfaces import NotificationServiceProtocol
+        from redis import Redis
 
         mock_redis = MagicMock(spec=Redis)
         mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
@@ -366,9 +365,8 @@ class TestTelemetryIngestor(unittest.TestCase):
         NOTE: This test uses REAL Logic classes with MOCKED Redis/Grader.
         """
         # 1. Setup Logic with Mocks
-        from redis import Redis
-
         from coreason_sentinel.interfaces import NotificationServiceProtocol
+        from redis import Redis
 
         mock_redis = MagicMock(spec=Redis)
         mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
