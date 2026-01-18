@@ -8,10 +8,9 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
-import math
 import time
 import unittest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from redis import Redis
 

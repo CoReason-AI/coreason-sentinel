@@ -28,9 +28,7 @@ class MetricStore:
     def __init__(self, redis_client: Redis[bytes]):
         self.redis = redis_client
 
-    def record_metric(
-        self, agent_id: str, metric_name: str, value: float, retention_window: int = 3600
-    ) -> None:
+    def record_metric(self, agent_id: str, metric_name: str, value: float, retention_window: int = 3600) -> None:
         """
         Records a metric event into a Redis Sorted Set (Sliding Window).
         """

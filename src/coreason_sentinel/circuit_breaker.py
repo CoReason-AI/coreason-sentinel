@@ -228,7 +228,9 @@ class CircuitBreaker:
         metrics["avg_latency"] = self.metric_store.calculate_average(self.agent_id, "latency", window_seconds=3600)
 
         # 2. Faithfulness (1h) - Average score
-        metrics["faithfulness"] = self.metric_store.calculate_average(self.agent_id, "faithfulness", window_seconds=3600)
+        metrics["faithfulness"] = self.metric_store.calculate_average(
+            self.agent_id, "faithfulness", window_seconds=3600
+        )
 
         # 3. Cost Per Query (1h) - Average cost per event
         metrics["cost_per_query"] = self.metric_store.calculate_average(self.agent_id, "cost", window_seconds=3600)

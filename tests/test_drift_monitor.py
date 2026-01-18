@@ -103,7 +103,7 @@ class TestDriftMonitor(unittest.TestCase):
         # 4. Mock DriftEngine
         with (
             patch("coreason_sentinel.drift_monitor.DriftEngine.compute_distribution_from_samples") as mock_dist,
-            patch("coreason_sentinel.drift_monitor.DriftEngine.compute_kl_divergence", return_value=0.1) as mock_kl
+            patch("coreason_sentinel.drift_monitor.DriftEngine.compute_kl_divergence", return_value=0.1),
         ):
             mock_dist.return_value = [0.6, 0.4]
 
@@ -125,20 +125,20 @@ class TestDriftMonitor(unittest.TestCase):
 
         self.monitor._check_output_drift(self.event)
         self.mock_metric_store.record_metric.assert_called_with(
-             "test_agent", "output_length", 50.0, retention_window=3600
+            "test_agent", "output_length", 50.0, retention_window=3600
         )
 
     def test_check_output_drift_fallback_length(self) -> None:
         """Test fallback output length calculation."""
-        self.event.metrics = {} # No tokens
-        self.event.output_text = "hello world" # 2 words
+        self.event.metrics = {}  # No tokens
+        self.event.output_text = "hello world"  # 2 words
 
         # Abort drift calculation early to just test length extraction
         self.mock_baseline_provider.get_baseline_output_length_distribution.return_value = None
 
         self.monitor._check_output_drift(self.event)
         self.mock_metric_store.record_metric.assert_called_with(
-             "test_agent", "output_length", 2.0, retention_window=3600
+            "test_agent", "output_length", 2.0, retention_window=3600
         )
 
     def test_check_output_drift_empty_baseline(self) -> None:
@@ -172,12 +172,11 @@ class TestDriftMonitor(unittest.TestCase):
 
     def test_check_relevance_drift_success(self) -> None:
         """Test relevance drift calculation."""
-        self.event.metadata = {
-            "query_embedding": [0.1, 0.0],
-            "response_embedding": [0.0, 0.1]
-        }
+        self.event.metadata = {"query_embedding": [0.1, 0.0], "response_embedding": [0.0, 0.1]}
 
-        with patch("coreason_sentinel.drift_monitor.DriftEngine.compute_relevance_drift", return_value=1.0) as mock_calc:
+        with patch(
+            "coreason_sentinel.drift_monitor.DriftEngine.compute_relevance_drift", return_value=1.0
+        ) as mock_calc:
             self.monitor._check_relevance_drift(self.event)
             mock_calc.assert_called()
             self.mock_metric_store.record_metric.assert_called_with(
@@ -192,19 +191,15 @@ class TestDriftMonitor(unittest.TestCase):
 
     def test_check_relevance_drift_invalid_type(self) -> None:
         """Test relevance drift skipped if invalid type."""
-        self.event.metadata = {
-            "query_embedding": "invalid",
-            "response_embedding": [0.1]
-        }
+        self.event.metadata = {"query_embedding": "invalid", "response_embedding": [0.1]}
         self.monitor._check_relevance_drift(self.event)
         self.mock_metric_store.record_metric.assert_not_called()
 
     def test_check_relevance_drift_exception(self) -> None:
         """Test exception handling."""
-        self.event.metadata = {
-            "query_embedding": [0.1],
-            "response_embedding": [0.1]
-        }
-        with patch("coreason_sentinel.drift_monitor.DriftEngine.compute_relevance_drift", side_effect=Exception("Math Error")):
+        self.event.metadata = {"query_embedding": [0.1], "response_embedding": [0.1]}
+        with patch(
+            "coreason_sentinel.drift_monitor.DriftEngine.compute_relevance_drift", side_effect=Exception("Math Error")
+        ):
             self.monitor._check_relevance_drift(self.event)
             self.mock_metric_store.record_metric.assert_not_called()

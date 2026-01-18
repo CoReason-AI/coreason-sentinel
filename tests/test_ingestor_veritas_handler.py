@@ -15,10 +15,7 @@ from coreason_sentinel.utils.metric_extractor import MetricExtractor
 class TestVeritasIngestionHandler(unittest.TestCase):
     def setUp(self) -> None:
         self.config = SentinelConfig(
-            agent_id="test_agent",
-            owner_email="test@example.com",
-            phoenix_endpoint="http://localhost",
-            triggers=[]
+            agent_id="test_agent", owner_email="test@example.com", phoenix_endpoint="http://localhost", triggers=[]
         )
         self.mock_client = MagicMock(spec=VeritasClientProtocol)
         self.mock_metric_store = MagicMock(spec=MetricStore)
@@ -34,13 +31,18 @@ class TestVeritasIngestionHandler(unittest.TestCase):
             self.mock_breaker,
             self.mock_spot_checker,
             self.mock_drift_monitor,
-            self.mock_extractor
+            self.mock_extractor,
         )
 
         self.event = VeritasEvent(
-            event_id="e1", timestamp=datetime.now(), agent_id="test_agent",
-            session_id="s1", input_text="in", output_text="out",
-            metrics={"latency": 0.5}, metadata={"meta": "data"}
+            event_id="e1",
+            timestamp=datetime.now(),
+            agent_id="test_agent",
+            session_id="s1",
+            input_text="in",
+            output_text="out",
+            metrics={"latency": 0.5},
+            metadata={"meta": "data"},
         )
 
     def test_ingest_since_success(self) -> None:
@@ -70,17 +72,13 @@ class TestVeritasIngestionHandler(unittest.TestCase):
         """Test recording of standard metrics."""
         self.mock_extractor.extract.return_value = {}
         self.handler.process_event(self.event)
-        self.mock_metric_store.record_metric.assert_any_call(
-            "test_agent", "latency", 0.5, retention_window=3600
-        )
+        self.mock_metric_store.record_metric.assert_any_call("test_agent", "latency", 0.5, retention_window=3600)
 
     def test_process_event_custom_metrics(self) -> None:
         """Test recording of custom metrics."""
         self.mock_extractor.extract.return_value = {"refusal_count": 1.0}
         self.handler.process_event(self.event)
-        self.mock_metric_store.record_metric.assert_any_call(
-            "test_agent", "refusal_count", 1.0, retention_window=3600
-        )
+        self.mock_metric_store.record_metric.assert_any_call("test_agent", "refusal_count", 1.0, retention_window=3600)
 
     def test_process_event_spot_check(self) -> None:
         """Test spot checking triggering."""
@@ -112,9 +110,14 @@ class TestVeritasIngestionHandler(unittest.TestCase):
     def test_process_event_exception_handling_in_loop(self) -> None:
         """Test individual event failure doesn't stop loop."""
         bad_event = VeritasEvent(
-            event_id="bad", timestamp=datetime.now(), agent_id="test_agent",
-            session_id="s1", input_text="in", output_text="out",
-            metrics={"latency": 0.5}, metadata={}
+            event_id="bad",
+            timestamp=datetime.now(),
+            agent_id="test_agent",
+            session_id="s1",
+            input_text="in",
+            output_text="out",
+            metrics={"latency": 0.5},
+            metadata={},
         )
         self.mock_client.fetch_logs.return_value = [bad_event, self.event]
 
@@ -124,19 +127,17 @@ class TestVeritasIngestionHandler(unittest.TestCase):
         self.mock_extractor.extract.side_effect = [Exception("Extract Error"), {}]
 
         count = self.handler.ingest_since(datetime.now())
-        self.assertEqual(count, 1) # Only 1 succeeded
+        self.assertEqual(count, 1)  # Only 1 succeeded
 
     def test_record_metrics_trigger_window(self) -> None:
         """Test trigger window max logic."""
         # Set up a trigger
         t = MagicMock()
         t.metric = "latency"
-        t.window_seconds = 7200 # 2 hours
+        t.window_seconds = 7200  # 2 hours
         self.config.triggers = [t]
 
         self.handler.process_event(self.event)
 
         # Verify retention window is max(3600, 7200) = 7200
-        self.mock_metric_store.record_metric.assert_any_call(
-            "test_agent", "latency", 0.5, retention_window=7200
-        )
+        self.mock_metric_store.record_metric.assert_any_call("test_agent", "latency", 0.5, retention_window=7200)
