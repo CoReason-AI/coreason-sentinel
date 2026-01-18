@@ -118,3 +118,9 @@ class TestOtelIngestionHandler(unittest.TestCase):
         self.handler.process_span(span)
         # Should call extract with empty string
         self.mock_metric_extractor.extract.assert_called_with("", attrs)
+
+    def test_extract_token_count_direct(self) -> None:
+        """Test _extract_token_count direct call for coverage."""
+        attrs: dict[str, Any] = {"llm.token_count.total": 123.0}
+        count = self.handler._extract_token_count(attrs)
+        self.assertEqual(count, 123.0)

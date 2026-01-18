@@ -156,3 +156,11 @@ class TestDriftEngine(unittest.TestCase):
         # All samples in bin [0, 5] -> count 3. Total 3. Prob = 3/3 = 1.0.
         dist = DriftEngine.compute_distribution_from_samples(samples, bin_edges)
         self.assertEqual(dist, [1.0])
+
+    def test_distribution_zero_total_explicit(self) -> None:
+        """Test when histogram counts sum to zero (samples outside bins)."""
+        samples = [10.0]
+        bin_edges = [0.0, 5.0]
+        # Histogram of [10.0] in bins [0, 5] is [0]. Sum is 0.
+        dist = DriftEngine.compute_distribution_from_samples(samples, bin_edges)
+        self.assertEqual(dist, [0.0])
