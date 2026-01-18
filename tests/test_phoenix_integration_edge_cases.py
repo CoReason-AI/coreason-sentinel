@@ -31,7 +31,7 @@ class TestPhoenixIntegrationEdgeCases(unittest.TestCase):
 
         # Default grader behavior: success
         self.mock_grader.grade_conversation.return_value = GradeResult(
-            faithfulness_score=0.9, safety_score=1.0, details={}
+            faithfulness_score=0.9, retrieval_precision_score=0.9, safety_score=1.0, details={}
         )
 
     def test_missing_span_id(self) -> None:

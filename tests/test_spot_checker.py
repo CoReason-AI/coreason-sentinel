@@ -41,7 +41,9 @@ class TestSpotChecker(unittest.TestCase):
 
     def test_check_sample_success(self) -> None:
         """Test successful grading without trace info."""
-        expected_result = GradeResult(faithfulness_score=0.9, safety_score=1.0, details={"reason": "good"})
+        expected_result = GradeResult(
+            faithfulness_score=0.9, retrieval_precision_score=0.95, safety_score=1.0, details={"reason": "good"}
+        )
         self.mock_grader.grade_conversation.return_value = expected_result
 
         conversation = {"messages": [{"role": "user", "content": "hello"}]}
@@ -53,7 +55,9 @@ class TestSpotChecker(unittest.TestCase):
 
     def test_check_sample_success_with_phoenix(self) -> None:
         """Test successful grading WITH trace info -> Phoenix update."""
-        expected_result = GradeResult(faithfulness_score=0.9, safety_score=1.0, details={"reason": "good"})
+        expected_result = GradeResult(
+            faithfulness_score=0.9, retrieval_precision_score=0.95, safety_score=1.0, details={"reason": "good"}
+        )
         self.mock_grader.grade_conversation.return_value = expected_result
 
         conversation = {
@@ -67,6 +71,7 @@ class TestSpotChecker(unittest.TestCase):
 
         expected_attributes = {
             "eval.faithfulness.score": 0.9,
+            "eval.retrieval.precision.score": 0.95,
             "eval.safety.score": 1.0,
         }
         self.mock_phoenix.update_span_attributes.assert_called_with(
@@ -83,7 +88,9 @@ class TestSpotChecker(unittest.TestCase):
 
     def test_check_sample_phoenix_failure(self) -> None:
         """Test successful grading but Phoenix update fails (should still return result)."""
-        expected_result = GradeResult(faithfulness_score=0.9, safety_score=1.0, details={"reason": "good"})
+        expected_result = GradeResult(
+            faithfulness_score=0.9, retrieval_precision_score=0.95, safety_score=1.0, details={"reason": "good"}
+        )
         self.mock_grader.grade_conversation.return_value = expected_result
         self.mock_phoenix.update_span_attributes.side_effect = Exception("Phoenix down")
 
