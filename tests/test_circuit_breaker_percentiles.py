@@ -273,6 +273,27 @@ def test_percentile_invalid_format(
     assert cb.get_state() == CircuitBreakerState.CLOSED
 
 
+def test_percentile_numpy_error(
+    mock_redis: MockRedis, mock_notification_service: MagicMock, basic_config: SentinelConfig
+) -> None:
+    # Trigger that causes np.percentile to fail (e.g., empty sequence, though we guard against empty)
+    # or invalid quantile
+    trigger = MagicMock(spec=CircuitBreakerTrigger)
+    trigger.metric = "latency"
+    trigger.threshold = 10.0
+    trigger.window_seconds = 60
+    trigger.aggregation_method = "P101" # Invalid percentile > 100
+    trigger.operator = ">"
+
+    basic_config.triggers = [trigger]
+    cb = CircuitBreaker(mock_redis, basic_config, mock_notification_service)
+    cb.record_metric("latency", 5.0)
+
+    # Should catch ValueError inside _evaluate_trigger
+    cb.check_triggers()
+    assert cb.get_state() == CircuitBreakerState.CLOSED
+
+
 def test_percentile_single_value(
     mock_redis: MockRedis, mock_notification_service: MagicMock, basic_config: SentinelConfig
 ) -> None:

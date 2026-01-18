@@ -203,3 +203,27 @@ class TestDriftMonitor(unittest.TestCase):
         ):
             self.monitor._check_relevance_drift(self.event)
             self.mock_metric_store.record_metric.assert_not_called()
+
+    def test_check_output_drift_baseline_error(self) -> None:
+        """Test handling of NotImplementedError from provider."""
+        self.event.metrics = {"completion_tokens": 100}
+        self.mock_baseline_provider.get_baseline_output_length_distribution.side_effect = NotImplementedError("Not supported")
+
+        self.monitor._check_output_drift(self.event)
+        # Should catch and log debug
+        # Should record length but not drift
+        self.mock_metric_store.record_metric.assert_called_with(
+            "test_agent", "output_length", 100.0, retention_window=3600
+        )
+
+    def test_check_output_drift_generic_exception(self) -> None:
+        """Test generic exception handling."""
+        self.event.metrics = {"completion_tokens": 100}
+        self.mock_baseline_provider.get_baseline_output_length_distribution.side_effect = Exception("Boom")
+
+        self.monitor._check_output_drift(self.event)
+        # Should catch and log error
+        # Should record length
+        self.mock_metric_store.record_metric.assert_called_with(
+            "test_agent", "output_length", 100.0, retention_window=3600
+        )

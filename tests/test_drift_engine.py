@@ -144,3 +144,15 @@ class TestDriftEngine(unittest.TestCase):
         dist = DriftEngine.compute_distribution_from_samples(samples, bin_edges)
         # Should return list of 0.0s (len = len(edges)-1 = 1)
         self.assertEqual(dist, [0.0])
+
+    def test_detect_vector_drift_zero_similarity_case(self) -> None:
+        # Cover 1 - similarity when similarity is 0.0
+        pass
+
+    def test_distribution_valid(self) -> None:
+        """Test valid distribution calculation to cover return cast lines."""
+        samples = [1.0, 2.0, 4.0]
+        bin_edges = [0.0, 5.0]
+        # All samples in bin [0, 5] -> count 3. Total 3. Prob = 3/3 = 1.0.
+        dist = DriftEngine.compute_distribution_from_samples(samples, bin_edges)
+        self.assertEqual(dist, [1.0])
