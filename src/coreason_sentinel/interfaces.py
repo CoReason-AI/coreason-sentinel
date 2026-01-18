@@ -52,6 +52,7 @@ class GradeResult(BaseModel):
     """
 
     faithfulness_score: float
+    retrieval_precision_score: float
     safety_score: float
     details: Dict[str, Any]
 

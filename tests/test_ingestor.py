@@ -202,7 +202,9 @@ class TestTelemetryIngestor(unittest.TestCase):
     def test_process_event_samples_and_records_grade(self) -> None:
         """Test that sampled events are graded and scores recorded."""
         self.mock_sc.should_sample.return_value = True
-        self.mock_sc.check_sample.return_value = GradeResult(faithfulness_score=0.9, safety_score=0.8, details={})
+        self.mock_sc.check_sample.return_value = GradeResult(
+            faithfulness_score=0.9, retrieval_precision_score=0.85, safety_score=0.8, details={}
+        )
 
         self.ingestor.process_event(self.event)
 
@@ -211,6 +213,7 @@ class TestTelemetryIngestor(unittest.TestCase):
 
         # Verify grade metrics recorded
         self.mock_cb.record_metric.assert_any_call("faithfulness_score", 0.9)
+        self.mock_cb.record_metric.assert_any_call("retrieval_precision_score", 0.85)
         self.mock_cb.record_metric.assert_any_call("safety_score", 0.8)
 
         # Check triggers called ONCE at the end
@@ -473,7 +476,9 @@ class TestTelemetryIngestor(unittest.TestCase):
         mock_redis.get.side_effect = mock_get
 
         # 3. Process Events
-        mock_grader.grade_conversation.return_value = GradeResult(faithfulness_score=0.1, safety_score=1.0, details={})
+        mock_grader.grade_conversation.return_value = GradeResult(
+            faithfulness_score=0.1, retrieval_precision_score=0.1, safety_score=1.0, details={}
+        )
         mock_redis.getset.return_value = b"CLOSED"
 
         for _i in range(5):
