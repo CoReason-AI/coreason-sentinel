@@ -1,10 +1,12 @@
-from typing import Any
 import unittest
+from typing import Any
 from unittest.mock import MagicMock, patch
+
+from redis import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
-from redis import Redis
+
 
 class TestCoverageGapFill(unittest.TestCase):
     def test_circuit_breaker_percentile_exception(self) -> None:
@@ -13,21 +15,18 @@ class TestCoverageGapFill(unittest.TestCase):
         We mock numpy.percentile to raise ValueError.
         """
         mock_redis = MagicMock(spec=Redis)
-        mock_redis.zrangebyscore.return_value = [b"123.0:1.0:uuid"] # Return something so logic proceeds
+        mock_redis.zrangebyscore.return_value = [b"123.0:1.0:uuid"]  # Return something so logic proceeds
 
-        trigger = CircuitBreakerTrigger(
-            metric="latency", threshold=10.0, window_seconds=60, aggregation_method="P99"
-        )
+        trigger = CircuitBreakerTrigger(metric="latency", threshold=10.0, window_seconds=60, aggregation_method="P99")
         config = SentinelConfig(
-            agent_id="test", owner_email="test@test.com", phoenix_endpoint="http://localhost",
-            triggers=[trigger]
+            agent_id="test", owner_email="test@test.com", phoenix_endpoint="http://localhost", triggers=[trigger]
         )
         breaker = CircuitBreaker(mock_redis, config, MagicMock())
 
         # We need to mock _parse_value_from_member if we mock metric store or rely on real one?
         # The breaker uses self.metric_store.get_values_in_window.
         # Let's mock the metric_store on the breaker instance directly to control return values easily.
-        breaker.metric_store.get_values_in_window = MagicMock(return_value=[1.0, 2.0]) # type: ignore
+        breaker.metric_store.get_values_in_window = MagicMock(return_value=[1.0, 2.0])  # type: ignore
 
         with patch("numpy.percentile", side_effect=ValueError("Test Error")):
             # This should trigger the except block
@@ -42,7 +41,6 @@ class TestCoverageGapFill(unittest.TestCase):
         Target drift_engine.py line 170 (if total == 0).
         """
         from coreason_sentinel.drift_engine import DriftEngine
-        import numpy as np
 
         # Construct scenario where histogram returns counts summing to 0.
         # Empty samples? No, that returns early.
@@ -66,7 +64,7 @@ class TestCoverageGapFill(unittest.TestCase):
             MagicMock(spec=SentinelConfig),
             MagicMock(spec=MetricStore),
             MagicMock(spec=CircuitBreaker),
-            MagicMock(spec=MetricExtractor)
+            MagicMock(spec=MetricExtractor),
         )
 
         # Pass a dict where token count is not a number
