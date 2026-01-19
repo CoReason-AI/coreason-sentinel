@@ -169,6 +169,9 @@ class DriftEngine:
         Returns:
             float: Drift score. 0.0 means perfectly relevant (identical direction).
                    1.0 means orthogonal. > 1.0 means opposite.
+
+        Raises:
+            ValueError: If vectors have different dimensions.
         """
         # reuse the static method
         similarity = cls.compute_cosine_similarity(query_embedding, response_embedding)
