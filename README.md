@@ -2,9 +2,10 @@
 
 **The "Watchtower" & Circuit Breaker for Production AI Agents**
 
-![License: Prosperity 3.0](https://img.shields.io/badge/License-Prosperity%203.0-blue)
-[![CI](https://github.com/CoReason-AI/coreason_sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/CoReason-AI/coreason_sentinel/actions/workflows/ci.yml)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: Prosperity 3.0](https://img.shields.io/badge/license-Prosperity%203.0-blue)](https://github.com/CoReason-AI/coreason-sentinel/blob/main/LICENSE)
+[![CI](https://github.com/CoReason-AI/coreason-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/CoReason-AI/coreason-sentinel/actions/workflows/ci.yml)
+[![Code Style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Docs](https://img.shields.io/badge/docs-product_requirements.md-blue)](docs/product_requirements.md)
 
 **coreason-sentinel** is an automated monitoring service for deployed LLM agents. It goes beyond simple "System Error" tracking to detect "Cognitive Errors" (Hallucinations) and "Business Errors" (Budget Spikes). Acting as a pharmacovigilance unit for AI, it monitors the agent's behavior in the real world, detects side effects like drift or toxicity, and triggers a **Circuit Breaker** to protect users and budgets if safety limits are breached.
 
@@ -22,6 +23,8 @@
 *   **Automated Circuit Breaker:** A "Dead Man's Switch" that transitions to **OPEN** (blocking traffic) if quality or safety drops below configured thresholds. Includes **HALF-OPEN** self-healing to test recovery.
 *   **The Spot Checker:** Automated QA that randomly samples live traffic (or focuses on negative sentiment) and loops it back for grading.
 
+For a full breakdown of requirements and philosophy, see the [Product Requirements Document](docs/product_requirements.md).
+
 ## Installation
 
 ```bash
@@ -33,6 +36,7 @@ pip install coreason-sentinel
 Here is how to initialize the Circuit Breaker to protect your agent:
 
 ```python
+import time
 from redis import Redis
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.models import SentinelConfig, CircuitBreakerTrigger
@@ -52,10 +56,15 @@ config = SentinelConfig(
 
 # 2. Initialize the Circuit Breaker
 # Note: You must provide a valid Redis client and a NotificationService implementation.
+# (Assuming a mock notification service for this example)
+class MockNotificationService:
+    def notify(self, message):
+        print(f"NOTIFICATION: {message}")
+
 breaker = CircuitBreaker(
     redis_client=Redis(),
     config=config,
-    notification_service=my_notification_service
+    notification_service=MockNotificationService()
 )
 
 # 3. Protect your Agent
@@ -65,14 +74,12 @@ if not breaker.allow_request():
 else:
     # Process your agent request...
     start_time = time.time()
-    # ... agent logic ...
-
-    # Record metrics for the breaker to monitor
-    breaker.record_metric("latency", time.time() - start_time)
+    try:
+        # ... agent logic ...
+        print("Agent processing request...")
+        pass
+    finally:
+        # Record metrics for the breaker to monitor
+        # In a real app, you would calculate actual latency
+        breaker.record_metric("latency", time.time() - start_time)
 ```
-
-## License
-
-This software is licensed under the **Prosperity Public License 3.0**.
-Commercial use beyond a 30-day trial requires a separate license.
-See the `LICENSE` file for details.

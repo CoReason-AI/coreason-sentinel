@@ -210,6 +210,9 @@ class TelemetryIngestor:
 
         Args:
             event: The VeritasEvent to analyze for drift.
+
+        Returns:
+            None: This method records metrics into the Circuit Breaker but returns nothing.
         """
         logger.info(f"Processing drift for event {event.event_id}")
 

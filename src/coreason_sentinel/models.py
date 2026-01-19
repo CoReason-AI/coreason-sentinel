@@ -62,11 +62,13 @@ class ConditionalSamplingRule(BaseModel):
 
 class SentinelConfig(BaseModel):
     """
-    Configuration for the Sentinel monitor.
+    Configuration for the Sentinel monitor (The Watchtower).
+
+    Defines the safety limits, sampling rates, and trigger conditions for the agent.
 
     Attributes:
         agent_id: Unique identifier for the agent being monitored.
-        owner_email: Email address for notifications.
+        owner_email: Email address for notifications (Critical Alerts).
         phoenix_endpoint: Endpoint URL for Phoenix tracing.
         sampling_rate: Fraction of traffic to sample (0.0 to 1.0).
         drift_threshold_kl: KL Divergence threshold for output drift detection.
