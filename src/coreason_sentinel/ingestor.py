@@ -61,7 +61,7 @@ class TelemetryIngestorAsync:
         self.baseline_provider = baseline_provider
         self.veritas_client = veritas_client
         self._internal_client = client is None
-        if client:  # pragma: no cover
+        if client:
             self._client = client
         else:
             self._client = httpx.AsyncClient()  # pragma: no cover
@@ -340,7 +340,7 @@ class TelemetryIngestor:
     def process_otel_span(self, span: OTELSpan) -> None:
         if not self._portal:
             raise RuntimeError("TelemetryIngestor must be used within a context manager (with ... as svc:)")
-        self._portal.call(self._async.process_otel_span, span)  # pragma: no cover
+        self._portal.call(self._async.process_otel_span, span)
 
     def ingest_from_veritas_since(self, since: datetime) -> int:
         if not self._portal:
