@@ -10,10 +10,10 @@
 
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
-from coreason_sentinel.ingestor import TelemetryIngestor
+from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import (
     BaselineProviderProtocol,
     VeritasClientProtocol,
@@ -23,8 +23,8 @@ from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
 
 
-class TestIngestorEdgeCases(unittest.TestCase):
-    def setUp(self) -> None:
+class TestIngestorEdgeCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
         self.config = SentinelConfig(
             agent_id="test-agent",
             owner_email="test@example.com",
@@ -37,7 +37,7 @@ class TestIngestorEdgeCases(unittest.TestCase):
         self.mock_sc.should_sample.return_value = False
         self.mock_bp = MagicMock(spec=BaselineProviderProtocol)
         self.mock_veritas = MagicMock(spec=VeritasClientProtocol)
-        self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp, self.mock_veritas)
+        self.ingestor = TelemetryIngestorAsync(self.config, self.mock_cb, self.mock_sc, self.mock_bp, self.mock_veritas)
 
         self.event = VeritasEvent(
             event_id="evt-1",
@@ -50,23 +50,24 @@ class TestIngestorEdgeCases(unittest.TestCase):
             metadata={"embedding": [0.1, 0.2]},
         )
 
-    def test_ingest_process_event_failure_skips_drift(self) -> None:
+    async def test_ingest_process_event_failure_skips_drift(self) -> None:
         """
         Edge Case: If process_event fails, process_drift should NOT be called.
         """
         # Setup: process_event raises exception
         with patch.object(self.ingestor, "process_event", side_effect=Exception("Processing Failed")):
-            with patch.object(self.ingestor, "process_drift") as mock_drift:
-                self.mock_veritas.fetch_logs.return_value = [self.event]
-
-                count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+            with patch.object(self.ingestor, "process_drift", new_callable=AsyncMock) as mock_drift:
+                # Need to mock anyio.to_thread.run_sync used in ingest_from_veritas_since
+                with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+                    self.mock_veritas.fetch_logs.return_value = [self.event]
+                    count = await self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
                 # Should not have processed successfully
                 self.assertEqual(count, 0)
                 # process_drift should NOT have been called
                 mock_drift.assert_not_called()
 
-    def test_ingest_process_drift_partial_failure_counts_success(self) -> None:
+    async def test_ingest_process_drift_partial_failure_counts_success(self) -> None:
         """
         Edge Case: If process_drift fails (externally) or swallows errors,
         but process_event succeeded, does it count?
@@ -78,45 +79,49 @@ class TestIngestorEdgeCases(unittest.TestCase):
         Let's test the scenario where process_drift RAISES an exception (simulating catastrophic failure).
         """
         with patch.object(self.ingestor, "process_drift", side_effect=Exception("Drift Boom")):
-            self.mock_veritas.fetch_logs.return_value = [self.event]
+            # Mock anyio.to_thread.run_sync if needed, but here fetch_logs is sync.
+            # But ingest_from_veritas_since wraps fetch_logs in run_sync.
+            with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+                self.mock_veritas.fetch_logs.return_value = [self.event]
 
-            # The exception is caught in the loop in ingestor.py
-            count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+                # The exception is caught in the loop in ingestor.py
+                count = await self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
-            # Since the try/except block wraps both calls, if process_drift fails,
-            # the 'count += 1' line is skipped.
-            # So expected count is 0.
-            self.assertEqual(count, 0)
+                # Since the try/except block wraps both calls, if process_drift fails,
+                # the 'count += 1' line is skipped.
+                # So expected count is 0.
+                self.assertEqual(count, 0)
 
         # Verify metrics from process_event WERE recorded (since it ran before the crash)
         self.mock_cb.record_metric.assert_any_call("latency", 0.1)
 
-    def test_ingest_drift_lag_simulation(self) -> None:
+    async def test_ingest_drift_lag_simulation(self) -> None:
         """
         Complex Scenario: Drift calculation is slow.
         Ensures strict ordering: process_event -> process_drift -> next event.
         """
         call_order = []
 
-        def mock_process_event(evt: VeritasEvent) -> None:
+        async def mock_process_event(evt: VeritasEvent) -> None:
             call_order.append(f"event_{evt.event_id}")
 
-        def mock_process_drift(evt: VeritasEvent) -> None:
+        async def mock_process_drift(evt: VeritasEvent) -> None:
             call_order.append(f"drift_{evt.event_id}")
 
         with patch.object(self.ingestor, "process_event", side_effect=mock_process_event):
             with patch.object(self.ingestor, "process_drift", side_effect=mock_process_drift):
-                evt1 = self.event.model_copy(update={"event_id": "1"})
-                evt2 = self.event.model_copy(update={"event_id": "2"})
-                self.mock_veritas.fetch_logs.return_value = [evt1, evt2]
+                with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+                    evt1 = self.event.model_copy(update={"event_id": "1"})
+                    evt2 = self.event.model_copy(update={"event_id": "2"})
+                    self.mock_veritas.fetch_logs.return_value = [evt1, evt2]
 
-                self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+                    await self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
-                # Strict sequential order
-                expected = ["event_1", "drift_1", "event_2", "drift_2"]
-                self.assertEqual(call_order, expected)
+                    # Strict sequential order
+                    expected = ["event_1", "drift_1", "event_2", "drift_2"]
+                    self.assertEqual(call_order, expected)
 
-    def test_ingest_empty_event_fields(self) -> None:
+    async def test_ingest_empty_event_fields(self) -> None:
         """
         Edge Case: Event with empty strings/dicts.
         Should not crash.
@@ -132,9 +137,9 @@ class TestIngestorEdgeCases(unittest.TestCase):
             metadata={},
         )
 
-        self.mock_veritas.fetch_logs.return_value = [weird_event]
-
-        count = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
+        with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+            self.mock_veritas.fetch_logs.return_value = [weird_event]
+            count = await self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
         self.assertEqual(count, 1)
         # Verify no crash in process_drift
