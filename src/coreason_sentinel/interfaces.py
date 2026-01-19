@@ -9,9 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 from datetime import datetime
-from typing import Any, Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VeritasEvent(BaseModel):
@@ -30,12 +30,29 @@ class VeritasEvent(BaseModel):
     metadata: Dict[str, Any]
 
 
+class OTELSpan(BaseModel):
+    """
+    Represents an OpenTelemetry Span for ingestion.
+    Simplified model focusing on fields relevant for Sentinel analysis.
+    """
+
+    trace_id: str = Field(..., description="Unique 32-hex-character identifier for the trace.")
+    span_id: str = Field(..., description="Unique 16-hex-character identifier for the span.")
+    name: str = Field(..., description="Name of the operation (e.g., 'query_llm').")
+    start_time_unix_nano: int = Field(..., description="Start time in nanoseconds since epoch.")
+    end_time_unix_nano: int = Field(..., description="End time in nanoseconds since epoch.")
+    attributes: Dict[str, Any] = Field(default_factory=dict, description="Key-value pairs of span attributes.")
+    status_code: str = Field("UNSET", description="Status code (UNSET, OK, ERROR).")
+    status_message: Optional[str] = Field(None, description="Status description if error.")
+
+
 class GradeResult(BaseModel):
     """
     Represents the output from the Assay Grader.
     """
 
     faithfulness_score: float
+    retrieval_precision_score: float
     safety_score: float
     details: Dict[str, Any]
 
@@ -87,5 +104,41 @@ class BaselineProviderProtocol(Protocol):
         Returns a tuple: (probabilities, bin_edges).
         - probabilities: List of float probabilities summing to 1.0.
         - bin_edges: List of floats defining the bin edges (len(probabilities) + 1).
+        """
+        ...
+
+
+class NotificationServiceProtocol(Protocol):
+    """
+    Interface for the Notification Service (Identity).
+    Responsible for sending alerts when critical events occur (e.g., Circuit Breaker Trips).
+    """
+
+    def send_critical_alert(self, email: str, agent_id: str, reason: str) -> None:
+        """
+        Sends a critical alert notification.
+
+        Args:
+            email: The recipient's email address (from SentinelConfig).
+            agent_id: The ID of the agent that triggered the alert.
+            reason: The description of why the alert was triggered (e.g., trigger violation).
+        """
+        ...
+
+
+class PhoenixClientProtocol(Protocol):
+    """
+    Interface for the Phoenix Tracing Service.
+    Responsible for updating spans with new attributes (e.g., evaluation grades).
+    """
+
+    def update_span_attributes(self, trace_id: str, span_id: str, attributes: Dict[str, Any]) -> None:
+        """
+        Updates an existing span with new attributes.
+
+        Args:
+            trace_id: The Trace ID associated with the span.
+            span_id: The Span ID to update.
+            attributes: A dictionary of attributes to append/update.
         """
         ...

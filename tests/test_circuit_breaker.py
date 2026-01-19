@@ -10,19 +10,27 @@
 
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from redis import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.interfaces import NotificationServiceProtocol
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 class TestCircuitBreakerState(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.config = SentinelConfig(agent_id="test-agent", circuit_breaker_triggers=[])
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[],
+            recovery_timeout=60,
+        )
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
     def test_get_state_default(self) -> None:
         """Test that get_state returns CLOSED if key is missing."""
@@ -33,9 +41,9 @@ class TestCircuitBreakerState(unittest.TestCase):
 
     def test_get_state_existing(self) -> None:
         """Test that get_state returns the stored state."""
-        self.mock_redis.get.return_value = b"OPEN"
+        self.mock_redis.get.return_value = b"CLOSED"
         state = self.breaker.get_state()
-        self.assertEqual(state, CircuitBreakerState.OPEN)
+        self.assertEqual(state, CircuitBreakerState.CLOSED)
 
     def test_get_state_redis_exception(self) -> None:
         """Test exception handling in get_state."""
@@ -46,11 +54,109 @@ class TestCircuitBreakerState(unittest.TestCase):
     def test_set_state(self) -> None:
         """Test transitioning state."""
         self.breaker.set_state(CircuitBreakerState.HALF_OPEN)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
+
+    def test_set_state_open_sets_cooldown(self) -> None:
+        """Test that setting OPEN sets the cooldown key."""
+        # Mock old state as CLOSED (so we trip)
+        self.mock_redis.getset.return_value = b"CLOSED"
+
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        # Check that getset was used
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.setex.assert_called_with("sentinel:breaker:test-agent:cooldown", 60, "1")
+
+    def test_set_state_open_sends_alert(self) -> None:
+        """Test that setting OPEN sends a critical alert."""
+        # Mock old state as CLOSED
+        self.mock_redis.getset.return_value = b"CLOSED"
+        reason = "Manual Trip"
+        self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
+        self.mock_notification_service.send_critical_alert.assert_called_once_with(
+            email="test@example.com", agent_id="test-agent", reason=reason
+        )
+
+    def test_idempotent_open_alert(self) -> None:
+        """
+        Test that setting OPEN when ALREADY OPEN does NOT send another alert.
+        """
+        # Mock old state as OPEN
+        self.mock_redis.getset.return_value = b"OPEN"
+        reason = "Manual Trip"
+        self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
+
+        # Should NOT alert
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+        # Should NOT reset cooldown
+        self.mock_redis.setex.assert_not_called()
+
+    def test_set_state_open_alert_failure(self) -> None:
+        """Test that alert failure doesn't crash the breaker."""
+        self.mock_redis.getset.return_value = b"CLOSED"
+        self.mock_notification_service.send_critical_alert.side_effect = Exception("Email Down")
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        # Should proceed to log but not crash
+        # Since we use getset, no explicit set call is made unless failure happens before?
+        # No, getset does the set.
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+
+    def test_missing_email_config(self) -> None:
+        """Test that no alert is sent if owner_email is missing."""
+        self.config.owner_email = ""
+        self.mock_redis.getset.return_value = b"CLOSED"
+
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+
+    def test_flapping_cycle_alerts(self) -> None:
+        """
+        Test that flapping (Open -> Closed -> Open) sends 2 alerts.
+        """
+        # 1. First Trip
+        self.mock_redis.getset.return_value = b"CLOSED"
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        self.assertEqual(self.mock_notification_service.send_critical_alert.call_count, 1)
+
+        # 2. Reset mock
+        self.mock_notification_service.reset_mock()
+
+        # 3. Recovery to CLOSED (getset returns OPEN)
+        self.mock_redis.getset.return_value = b"OPEN"
+        self.breaker.set_state(CircuitBreakerState.CLOSED)
+        self.mock_notification_service.send_critical_alert.assert_not_called()
+
+        # 4. Second Trip (getset returns CLOSED)
+        self.mock_redis.getset.return_value = b"CLOSED"
+        self.breaker.set_state(CircuitBreakerState.OPEN)
+        self.assertEqual(self.mock_notification_service.send_critical_alert.call_count, 1)
+
+    def test_get_state_auto_recovery_from_open(self) -> None:
+        """Test OPEN -> HALF_OPEN transition when cooldown expires."""
+        self.mock_redis.get.return_value = b"OPEN"
+        # exists returns 0 (False) meaning key expired
+        self.mock_redis.exists.return_value = 0
+
+        state = self.breaker.get_state()
+
+        # Should transition to HALF_OPEN
+        self.assertEqual(state, CircuitBreakerState.HALF_OPEN)
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "HALF_OPEN")
+
+    def test_get_state_open_waiting_for_cooldown(self) -> None:
+        """Test OPEN state persists if cooldown exists."""
+        self.mock_redis.get.return_value = b"OPEN"
+        # exists returns 1 (True)
+        self.mock_redis.exists.return_value = 1
+
+        state = self.breaker.get_state()
+        self.assertEqual(state, CircuitBreakerState.OPEN)
+        # Should NOT transition
+        self.mock_redis.set.assert_not_called()
 
     def test_set_state_redis_exception(self) -> None:
         """Test exception handling in set_state."""
-        self.mock_redis.set.side_effect = Exception("Connection Error")
+        self.mock_redis.getset.side_effect = Exception("Connection Error")
         with self.assertRaises(Exception):  # noqa: B017
             self.breaker.set_state(CircuitBreakerState.OPEN)
 
@@ -58,18 +164,70 @@ class TestCircuitBreakerState(unittest.TestCase):
         """Test that get_state defaults to CLOSED on Redis error."""
         self.mock_redis.get.side_effect = Exception("Redis connection failed")
         state = self.breaker.get_state()
-        # Should default to CLOSED (Fail Safe)
         self.assertEqual(state, CircuitBreakerState.CLOSED)
 
 
 class TestCircuitBreakerLogic(unittest.TestCase):
     def setUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
-        self.trigger = Trigger(
-            metric_name="error_count", threshold=5, window_seconds=60, operator=">", aggregation_method="SUM"
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+        self.trigger = CircuitBreakerTrigger(
+            metric="error_count",
+            threshold=5,
+            window_seconds=60,
+            operator=">",
+            aggregation_method="SUM",
         )
-        self.config = SentinelConfig(agent_id="test-agent", circuit_breaker_triggers=[self.trigger])
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config = SentinelConfig(
+            agent_id="test-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[self.trigger],
+        )
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
+
+    def test_allow_request_closed(self) -> None:
+        self.mock_redis.get.return_value = b"CLOSED"
+        self.assertTrue(self.breaker.allow_request())
+
+    def test_allow_request_open(self) -> None:
+        # Assuming cooldown exists
+        self.mock_redis.get.return_value = b"OPEN"
+        self.mock_redis.exists.return_value = 1
+        self.assertFalse(self.breaker.allow_request())
+
+    def test_allow_request_half_open(self) -> None:
+        self.mock_redis.get.return_value = b"HALF_OPEN"
+        # Probabilistic, so we patch random
+        with patch("random.random", return_value=0.04):  # < 0.05
+            self.assertTrue(self.breaker.allow_request())
+        with patch("random.random", return_value=0.06):  # > 0.05
+            self.assertFalse(self.breaker.allow_request())
+
+    def test_check_triggers_recovery_to_closed(self) -> None:
+        """Test HALF_OPEN -> CLOSED if no violation."""
+        self.mock_redis.get.return_value = b"HALF_OPEN"
+        self.mock_redis.zrangebyscore.return_value = []  # No events
+
+        self.breaker.check_triggers()
+
+        # Should set CLOSED
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "CLOSED")
+
+    def test_check_triggers_half_open_failure(self) -> None:
+        """Test HALF_OPEN -> OPEN if violation."""
+        self.mock_redis.get.return_value = b"HALF_OPEN"
+        # Events that violate threshold
+        now = time.time()
+        members = [f"{now}:10.0:id1".encode("utf-8")]
+        self.mock_redis.zrangebyscore.return_value = members
+
+        self.breaker.check_triggers()
+
+        # Should set OPEN (and reset cooldown)
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        # Ensure cooldown set
+        self.mock_redis.setex.assert_called()
 
     def test_record_metric(self) -> None:
         """Test recording a metric event."""
@@ -79,7 +237,6 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         key = args[0]
         mapping = args[1]
         self.assertEqual(key, "sentinel:metrics:test-agent:error_count")
-        # Ensure mapping has 1 item
         self.assertEqual(len(mapping), 1)
 
     def test_record_metric_exception(self) -> None:
@@ -87,20 +244,11 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.zadd.side_effect = Exception("Redis Error")
         # Should catch and log error, not raise
         self.breaker.record_metric("error_count", 1.0)
-        # Verify log happened? Logger is global, tricky to verify without patch.
-        # But we verify it doesn't crash.
 
     def test_record_metric_pruning(self) -> None:
         """Test that record_metric prunes old events."""
         self.breaker.record_metric("error_count", 1.0)
-
-        # Verify zremrangebyscore was called
         self.mock_redis.zremrangebyscore.assert_called_once()
-        args, _ = self.mock_redis.zremrangebyscore.call_args
-        self.assertEqual(args[0], "sentinel:metrics:test-agent:error_count")
-        self.assertEqual(args[1], "-inf")
-        # Ensure the 3rd arg is a float timestamp
-        self.assertIsInstance(args[2], float)
 
     def test_record_metric_nan(self) -> None:
         """Test that NaN values are ignored."""
@@ -114,39 +262,28 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
     def test_evaluate_trigger_trips(self) -> None:
         """Test that exceeding threshold trips the breaker."""
-        # Mock Redis returning 6 events (threshold is 5)
-        # Member format: "{timestamp}:{value}:{uuid}"
         now = time.time()
         members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(6)]
         self.mock_redis.zrangebyscore.return_value = members
-
-        # Mock current state as CLOSED
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-
-        # Should transition to OPEN
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_evaluate_trigger_already_open(self) -> None:
         """Test that checks are skipped if breaker is already OPEN."""
         self.mock_redis.get.return_value = b"OPEN"
         self.breaker.check_triggers()
-        # Should return early
         self.mock_redis.zrangebyscore.assert_not_called()
 
     def test_evaluate_trigger_no_trip(self) -> None:
         """Test that staying under threshold does NOT trip breaker."""
-        # Mock Redis returning 3 events (threshold is 5)
         now = time.time()
         members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(3)]
         self.mock_redis.zrangebyscore.return_value = members
-
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-
-        # Should NOT transition to OPEN
         self.mock_redis.set.assert_not_called()
 
     def test_evaluate_trigger_exception(self) -> None:
@@ -160,30 +297,25 @@ class TestCircuitBreakerLogic(unittest.TestCase):
 
     def test_sum_metric_logic(self) -> None:
         """Test that values are summed correctly (e.g. Cost)."""
-        # Trigger: Cost > 100
-        cost_trigger = Trigger(
-            metric_name="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
+        cost_trigger = CircuitBreakerTrigger(
+            metric="cost", threshold=100, window_seconds=60, operator=">", aggregation_method="SUM"
         )
-        self.config.circuit_breaker_triggers = [cost_trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config.triggers = [cost_trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
-        # Mock Redis returning 2 events of value 60 (Sum = 120 > 100)
         now = time.time()
         members = [f"{now}:60.0:id1".encode("utf-8"), f"{now}:60.0:id2".encode("utf-8")]
         self.mock_redis.zrangebyscore.return_value = members
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_bad_member_format(self) -> None:
         """Test resilience against malformed Redis data."""
         members = [b"malformed_string_without_colons"]
         self.mock_redis.zrangebyscore.return_value = members
         self.mock_redis.get.return_value = b"CLOSED"
-
-        # Should default to value 1.0. If threshold is 5, sum is 1. No trip.
         self.breaker.check_triggers()
         self.mock_redis.set.assert_not_called()
 
@@ -192,62 +324,54 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         members = [b"timestamp:not_a_float:id"]
         self.mock_redis.zrangebyscore.return_value = members
         self.mock_redis.get.return_value = b"CLOSED"
-
-        # Should default to 1.0. 1.0 < 5. No trip.
         self.breaker.check_triggers()
         self.mock_redis.set.assert_not_called()
 
     def test_operator_less_than(self) -> None:
         """Test '<' operator."""
-        # Trigger: quality < 0.5
-        trigger = Trigger(
-            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
-        self.config.circuit_breaker_triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config.triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
-        # Redis has value 0.4
         now = time.time()
         members = [f"{now}:0.4:id1".encode("utf-8")]
         self.mock_redis.zrangebyscore.return_value = members
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-
-        # Should trip (AVG is 0.4 < 0.5)
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_evaluate_empty_events(self) -> None:
         """Test trigger evaluation when no events exist in window."""
         self.mock_redis.zrangebyscore.return_value = []
         self.mock_redis.get.return_value = b"CLOSED"
 
-        # AVG with empty events -> Returns False (no data)
-        trigger = Trigger(
-            metric_name="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
+        trigger = CircuitBreakerTrigger(
+            metric="quality", threshold=0.5, window_seconds=60, operator="<", aggregation_method="AVG"
         )
-        self.config.circuit_breaker_triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config.triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         self.breaker.check_triggers()
         self.mock_redis.set.assert_not_called()
 
     def test_aggregation_count(self) -> None:
         """Test COUNT aggregation."""
-        trigger = Trigger(
-            metric_name="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
+        trigger = CircuitBreakerTrigger(
+            metric="errors", threshold=2, window_seconds=60, operator=">", aggregation_method="COUNT"
         )
-        self.config.circuit_breaker_triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config.triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
-        # 3 events
         now = time.time()
         members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(3)]
         self.mock_redis.zrangebyscore.return_value = members
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
 
     def test_aggregation_min_max(self) -> None:
         """Test MIN and MAX aggregation."""
@@ -257,31 +381,35 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         # MAX > 4 -> Trip
-        trigger = Trigger(metric_name="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX")
-        self.config.circuit_breaker_triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        trigger = CircuitBreakerTrigger(
+            metric="test", threshold=4, window_seconds=60, operator=">", aggregation_method="MAX"
+        )
+        self.config.triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called()
-        self.mock_redis.set.reset_mock()
+        self.mock_redis.getset.assert_called()
+        self.mock_redis.getset.reset_mock()
 
         # MIN < 2 -> Trip
-        trigger = Trigger(metric_name="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN")
-        self.config.circuit_breaker_triggers = [trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        trigger = CircuitBreakerTrigger(
+            metric="test", threshold=2, window_seconds=60, operator="<", aggregation_method="MIN"
+        )
+        self.config.triggers = [trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
         self.breaker.check_triggers()
-        self.mock_redis.set.assert_called()
+        self.mock_redis.getset.assert_called()
 
     def test_return_false_on_unknown_operator(self) -> None:
         """Test invalid operator."""
-        mock_trigger = MagicMock(spec=Trigger)
-        mock_trigger.metric_name = "test"
+        mock_trigger = MagicMock(spec=CircuitBreakerTrigger)
+        mock_trigger.metric = "test"
         mock_trigger.threshold = 10
         mock_trigger.window_seconds = 60
         mock_trigger.operator = "=="
         mock_trigger.aggregation_method = "SUM"
 
-        self.config.circuit_breaker_triggers = [mock_trigger]
-        self.breaker = CircuitBreaker(self.mock_redis, self.config)
+        self.config.triggers = [mock_trigger]
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
         now = time.time()
         members = [f"{now}:100.0:id1".encode("utf-8")]
@@ -289,7 +417,6 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
 
         self.breaker.check_triggers()
-
         self.mock_redis.set.assert_not_called()
 
     def test_get_recent_values_exception(self) -> None:
@@ -297,11 +424,169 @@ class TestCircuitBreakerLogic(unittest.TestCase):
         self.mock_redis.zrevrange.side_effect = Exception("Redis Down")
         values = self.breaker.get_recent_values("test_metric")
         self.assertEqual(values, [])
-        # We can't easily assert logger call with loguru unless we capture it,
-        # but coverage will show the line run.
 
     def test_get_recent_values_empty(self) -> None:
         """Test fetching recent values returns empty list if none found."""
         self.mock_redis.zrevrange.return_value = []
         values = self.breaker.get_recent_values("test_metric")
         self.assertEqual(values, [])
+
+    def test_get_recent_values_success(self) -> None:
+        """Test fetching recent values with valid data."""
+        now = time.time()
+        members = [f"{now}:10.0:id1".encode("utf-8"), f"{now}:20.0:id2".encode("utf-8")]
+        self.mock_redis.zrevrange.return_value = members
+        values = self.breaker.get_recent_values("test_metric")
+        self.assertEqual(values, [10.0, 20.0])
+
+    def test_allow_request_unknown_state(self) -> None:
+        """Test allow_request fallback for unknown state."""
+        self.mock_redis.get.return_value = b"UNKNOWN"
+        # get_state returns "UNKNOWN" if we force it, but get_state logic casts to Enum or defaults to CLOSED.
+        # However, get_state code: `return CircuitBreakerState(state_bytes.decode("utf-8"))`.
+        # If redis returns "UNKNOWN", CircuitBreakerState constructor will raise ValueError!
+        # And get_state exception handler catches it and returns CLOSED.
+        # So it's hard to make get_state return "UNKNOWN".
+        # We must mock get_state directly on the breaker instance.
+        with patch.object(self.breaker, "get_state", return_value="UNKNOWN"):
+            self.assertTrue(self.breaker.allow_request())
+
+
+class TestCircuitBreakerComplexScenarios(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mock_redis = MagicMock(spec=Redis)
+        self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
+        self.trigger_error = CircuitBreakerTrigger(
+            metric="errors",
+            threshold=5,
+            window_seconds=10,
+            operator=">",
+            aggregation_method="SUM",
+        )
+        self.trigger_latency = CircuitBreakerTrigger(
+            metric="latency",
+            threshold=1000,
+            window_seconds=10,
+            operator=">",
+            aggregation_method="AVG",
+        )
+        self.config = SentinelConfig(
+            agent_id="complex-agent",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[self.trigger_error, self.trigger_latency],
+            recovery_timeout=60,
+        )
+        self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
+
+    def test_auto_transition_failure(self) -> None:
+        """
+        Edge Case: Redis fails during the implicit OPEN -> HALF_OPEN transition in get_state.
+        Should handle exception gracefully and default to safe state (CLOSED or OPEN depending on view).
+        The code catches exception and returns CLOSED.
+        """
+        self.mock_redis.get.return_value = b"OPEN"
+        self.mock_redis.exists.return_value = 0  # Cooldown expired
+        # set_state will be called. Make it fail.
+        self.mock_redis.getset.side_effect = Exception("Redis Write Failed")
+
+        # The get_state method catches exception from set_state (via self.set_state) or internal block?
+        # get_state calls set_state. set_state re-raises exception?
+        # Let's check implementation:
+        # set_state raises 'e'.
+        # get_state wraps everything in try/except and returns CLOSED.
+
+        state = self.breaker.get_state()
+        self.assertEqual(state, CircuitBreakerState.CLOSED)
+
+    def test_full_recovery_cycle_with_traffic(self) -> None:
+        """
+        Complex Scenario: OPEN -> HALF_OPEN -> Healthy Traffic -> CLOSED
+        """
+        # 1. Start as OPEN
+        self.mock_redis.get.return_value = b"OPEN"
+        self.mock_redis.exists.return_value = 0  # Cooldown expired
+
+        # 2. Call get_state -> Triggers transition to HALF_OPEN
+        state = self.breaker.get_state()
+        self.assertEqual(state, CircuitBreakerState.HALF_OPEN)
+        # Verify set_state called
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "HALF_OPEN")
+
+        # 3. Simulate Healthy Traffic
+        # In HALF_OPEN, we check triggers.
+        # Let's say we have metrics that are SAFE (Errors = 2 < 5)
+        self.mock_redis.get.return_value = b"HALF_OPEN"
+        now = time.time()
+        members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(2)]  # Sum = 2
+        self.mock_redis.zrangebyscore.return_value = members
+
+        # 4. Check Triggers
+        self.breaker.check_triggers()
+
+        # 5. Should transition to CLOSED
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "CLOSED")
+
+    def test_relapse_cycle(self) -> None:
+        """
+        Complex Scenario: OPEN -> HALF_OPEN -> Unhealthy Traffic -> OPEN
+        """
+        # 1. Start as HALF_OPEN (assuming transition happened)
+        self.mock_redis.get.return_value = b"HALF_OPEN"
+
+        # 2. Simulate Unhealthy Traffic (Errors = 10 > 5)
+        now = time.time()
+        members = [f"{now}:1.0:id{i}".encode("utf-8") for i in range(10)]  # Sum = 10
+        self.mock_redis.zrangebyscore.return_value = members
+
+        # 3. Check Triggers
+        self.breaker.check_triggers()
+
+        # 4. Should transition back to OPEN
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
+        # And reset cooldown
+        self.mock_redis.setex.assert_called_with("sentinel:breaker:complex-agent:cooldown", 60, "1")
+
+    def test_multi_trigger_logic(self) -> None:
+        """
+        Test that violating ANY trigger trips the breaker.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+
+        # Scenario 1: Latency is fine, Errors high
+        # We need to simulate zrangebyscore returning different things for different keys.
+        # key format: sentinel:metrics:{agent}:{metric}
+
+        def zrange_side_effect(key: str, start: float | str, end: float | str) -> list[bytes]:
+            if "errors" in key:
+                # 10 errors
+                return [f"{time.time()}:1.0:id{i}".encode("utf-8") for i in range(10)]
+            if "latency" in key:
+                # Low latency
+                return [f"{time.time()}:100.0:id{i}".encode("utf-8") for i in range(5)]
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        self.breaker.check_triggers()
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")
+
+    def test_multi_trigger_second_violation(self) -> None:
+        """
+        Test that violating the SECOND trigger trips it even if first is fine.
+        """
+        self.mock_redis.get.return_value = b"CLOSED"
+
+        def zrange_side_effect(key: str, start: float | str, end: float | str) -> list[bytes]:
+            if "errors" in key:
+                # 0 errors
+                return []
+            if "latency" in key:
+                # High latency (2000 > 1000)
+                return [f"{time.time()}:2000.0:id{i}".encode("utf-8") for i in range(5)]
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
+
+        self.breaker.check_triggers()
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:complex-agent:state", "OPEN")

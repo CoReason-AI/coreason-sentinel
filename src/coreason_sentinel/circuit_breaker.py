@@ -11,13 +11,17 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 import uuid
+from datetime import datetime
 from enum import Enum
 
+import numpy as np
 from redis import Redis
 
-from coreason_sentinel.models import SentinelConfig, Trigger
+from coreason_sentinel.interfaces import NotificationServiceProtocol
+from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
 from coreason_sentinel.utils.logger import logger
 
 
@@ -33,36 +37,94 @@ class CircuitBreaker:
     Uses Redis for persistence to ensure stateless workers see the same state.
     """
 
-    def __init__(self, redis_client: Redis[bytes], config: SentinelConfig):
+    def __init__(
+        self,
+        redis_client: Redis[bytes],
+        config: SentinelConfig,
+        notification_service: NotificationServiceProtocol,
+    ):
         self.redis = redis_client
         self.config = config
+        self.notification_service = notification_service
         self.agent_id = config.agent_id
         self._state_key = f"sentinel:breaker:{self.agent_id}:state"
+        self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
 
     def get_state(self) -> CircuitBreakerState:
         """
         Retrieves the current state from Redis.
         Defaults to CLOSED if no state is recorded.
+        AUTO-TRANSITION: If state is OPEN and cooldown has expired, transitions to HALF_OPEN.
         """
         try:
             state_bytes = self.redis.get(self._state_key)
             if state_bytes is None:
                 return CircuitBreakerState.CLOSED
-            return CircuitBreakerState(state_bytes.decode("utf-8"))
+
+            state = CircuitBreakerState(state_bytes.decode("utf-8"))
+
+            if state == CircuitBreakerState.OPEN:
+                # Check cooldown
+                if not self.redis.exists(self._cooldown_key):
+                    logger.info(f"Cooldown expired for {self.agent_id}. Transitioning to HALF_OPEN.")
+                    self.set_state(CircuitBreakerState.HALF_OPEN)
+                    return CircuitBreakerState.HALF_OPEN
+
+            return state
         except Exception as e:
             logger.error(f"Failed to fetch circuit breaker state from Redis: {e}")
             return CircuitBreakerState.CLOSED
 
-    def set_state(self, state: CircuitBreakerState) -> None:
+    def set_state(self, state: CircuitBreakerState, reason: str | None = None) -> None:
         """
         Explicitly sets the circuit breaker state.
         """
         try:
-            self.redis.set(self._state_key, state.value)
+            # Atomic set and get old value
+            old_state_bytes = self.redis.getset(self._state_key, state.value)
+
+            # Determine if we are effectively transitioning to OPEN
+            # We treat None (missing key) as CLOSED.
+            was_open = old_state_bytes is not None and old_state_bytes.decode("utf-8") == CircuitBreakerState.OPEN.value
+
+            if state == CircuitBreakerState.OPEN and not was_open:
+                # Set cooldown
+                self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
+                # Send Critical Alert
+                if self.config.owner_email:
+                    alert_reason = reason or "Circuit Breaker Tripped (Manual or Unknown)"
+                    try:
+                        self.notification_service.send_critical_alert(
+                            email=self.config.owner_email,
+                            agent_id=self.agent_id,
+                            reason=alert_reason,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send critical alert notification: {e}")
+
             logger.info(f"Circuit Breaker for {self.agent_id} transitioned to {state.value}")
         except Exception as e:
             logger.error(f"Failed to set circuit breaker state in Redis: {e}")
             raise e
+
+    def allow_request(self) -> bool:
+        """
+        Determines if a request should be allowed based on the current state.
+        CLOSED: Allow all.
+        OPEN: Block all.
+        HALF_OPEN: Allow 5% probabilistic trickle.
+        """
+        state = self.get_state()
+
+        if state == CircuitBreakerState.CLOSED:
+            return True
+        elif state == CircuitBreakerState.OPEN:
+            return False
+        elif state == CircuitBreakerState.HALF_OPEN:
+            # Allow 5% of traffic
+            return random.random() < 0.05
+
+        return True  # Fallback
 
     def record_metric(self, metric_name: str, value: float = 1.0) -> None:
         """
@@ -85,8 +147,8 @@ class CircuitBreaker:
 
             # Prune old metrics to prevent memory leak
             max_window = 3600  # Default 1 hour
-            for t in self.config.circuit_breaker_triggers:
-                if t.metric_name == metric_name:
+            for t in self.config.triggers:
+                if t.metric == metric_name:
                     max_window = max(max_window, t.window_seconds)
 
             # Remove elements older than the window
@@ -101,26 +163,39 @@ class CircuitBreaker:
         """
         Evaluates all configured triggers against the recorded metrics.
         If a trigger is violated, trips the breaker to OPEN.
+        If in HALF_OPEN and no trigger is violated, transitions to CLOSED.
         """
-        # If already OPEN, no need to check (or maybe we check for recovery? logic usually separates them)
-        if self.get_state() == CircuitBreakerState.OPEN:
+        state = self.get_state()
+
+        if state == CircuitBreakerState.OPEN:
             return
 
         now = time.time()
-        for trigger in self.config.circuit_breaker_triggers:
+        violation = False
+
+        for trigger in self.config.triggers:
             if self._evaluate_trigger(trigger, now):
-                logger.warning(
-                    f"Trigger violated: {trigger.metric_name} {trigger.operator} {trigger.threshold} "
-                    f"in last {trigger.window_seconds}s. Tripping Circuit Breaker."
+                reason = (
+                    f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
+                    f"in last {trigger.window_seconds}s"
                 )
-                self.set_state(CircuitBreakerState.OPEN)
+                logger.warning(f"{reason}. Tripping Circuit Breaker.")
+                self.set_state(CircuitBreakerState.OPEN, reason=reason)
+                violation = True
                 return
 
-    def _evaluate_trigger(self, trigger: Trigger, now: float) -> bool:
+        # Recovery Logic
+        if state == CircuitBreakerState.HALF_OPEN and not violation:
+            # If we are here, it means no triggers were violated.
+            # We assume the trickle traffic was successful.
+            logger.info(f"Circuit Breaker for {self.agent_id} recovering to CLOSED.")
+            self.set_state(CircuitBreakerState.CLOSED)
+
+    def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
         """
         Returns True if the trigger condition is met (violation).
         """
-        key = f"sentinel:metrics:{self.agent_id}:{trigger.metric_name}"
+        key = f"sentinel:metrics:{self.agent_id}:{trigger.metric}"
         start_time = now - trigger.window_seconds
 
         try:
@@ -145,6 +220,15 @@ class CircuitBreaker:
                 aggregated_value = min(values)
             elif trigger.aggregation_method == "MAX":
                 aggregated_value = max(values)
+            elif trigger.aggregation_method.startswith("P"):
+                # Handle Percentiles (P50, P90, P95, P99)
+                try:
+                    percentile = float(trigger.aggregation_method[1:])
+                    # numpy.percentile expects range 0-100
+                    aggregated_value = float(np.percentile(values, percentile))
+                except (ValueError, IndexError):
+                    logger.error(f"Invalid percentile format {trigger.aggregation_method} for trigger {trigger.metric}")
+                    return False
 
             # Compare
             if trigger.operator == ">":
@@ -154,7 +238,7 @@ class CircuitBreaker:
             return False
 
         except Exception as e:
-            logger.error(f"Failed to evaluate trigger {trigger.metric_name}: {e}")
+            logger.error(f"Failed to evaluate trigger {trigger.metric}: {e}")
             return False
 
     def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
@@ -174,6 +258,51 @@ class CircuitBreaker:
         except Exception as e:
             logger.error(f"Failed to fetch recent values for {metric_name}: {e}")
             return []
+
+    def get_health_report(self) -> HealthReport:
+        """
+        Generates a Health Report for the agent, aggregating metrics over the last hour.
+        """
+        state = self.get_state()
+        metrics: dict[str, float] = {}
+
+        # Default metrics to aggregate
+        # 1. Avg Latency (1h)
+        metrics["avg_latency"] = self._calculate_metric_average("latency", window_seconds=3600)
+
+        # 2. Faithfulness (1h) - Average score
+        metrics["faithfulness"] = self._calculate_metric_average("faithfulness", window_seconds=3600)
+
+        # 3. Cost Per Query (1h) - Average cost per event
+        metrics["cost_per_query"] = self._calculate_metric_average("cost", window_seconds=3600)
+
+        # 4. KL Divergence (1h) - Average drift score
+        metrics["kl_divergence"] = self._calculate_metric_average("output_drift_kl", window_seconds=3600)
+
+        return HealthReport(
+            timestamp=datetime.fromtimestamp(time.time()),
+            breaker_state=state.value,
+            metrics=metrics,
+        )
+
+    def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
+        """
+        Calculates the average value of a metric over the specified window.
+        Returns 0.0 if no data exists.
+        """
+        key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
+        start_time = time.time() - window_seconds
+        try:
+            events = self.redis.zrangebyscore(key, start_time, "+inf")
+            if not events:
+                return 0.0
+
+            values = [self._parse_value_from_member(m) for m in events]
+
+            return sum(values) / len(values)
+        except Exception as e:
+            logger.error(f"Failed to calculate average for {metric_name}: {e}")
+            return 0.0
 
     def _parse_value_from_member(self, member: bytes) -> float:
         """
