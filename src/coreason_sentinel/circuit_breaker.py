@@ -219,6 +219,9 @@ class CircuitBreaker:
         Side Effects:
             - May change the Circuit Breaker state.
             - Logs warnings/infos on state transitions.
+
+        Raises:
+            Exception: Propagates any internal Redis errors during state transition or metric retrieval.
         """
         state = self.get_state()
 
