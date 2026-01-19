@@ -22,15 +22,25 @@ app = FastAPI(title="CoReason Sentinel", version="0.1.0")
 def get_telemetry_ingestor() -> TelemetryIngestor:
     """
     Dependency to provide the TelemetryIngestor instance.
+
     In a real deployment, this would initialize the full object graph
     (Redis, Veritas Client, etc.) based on configuration.
     For now, it raises NotImplementedError to ensure tests override it.
+
+    Raises:
+        NotImplementedError: Always, as this is a placeholder dependency.
     """
     raise NotImplementedError("TelemetryIngestor dependency must be overridden.")
 
 
 @app.get("/health")  # type: ignore[misc]
 def health_check() -> dict[str, str]:
+    """
+    Health check endpoint.
+
+    Returns:
+        dict[str, str]: Status message {"status": "ok"}.
+    """
     return {"status": "ok"}
 
 
@@ -42,7 +52,16 @@ def ingest_otel_span(
 ) -> dict[str, str]:
     """
     Ingests a single OpenTelemetry span.
-    Processing is offloaded to a background task.
+
+    Processing is offloaded to a background task to ensure low latency for the tracing client.
+
+    Args:
+        span: The OpenTelemetry span to ingest.
+        background_tasks: FastAPI BackgroundTasks object.
+        ingestor: The TelemetryIngestor instance.
+
+    Returns:
+        dict[str, str]: Status message and span ID.
     """
     logger.info(f"Received OTEL span: {span.span_id}")
     background_tasks.add_task(ingestor.process_otel_span, span)

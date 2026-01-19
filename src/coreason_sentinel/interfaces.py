@@ -18,6 +18,16 @@ class VeritasEvent(BaseModel):
     """
     Represents a raw event from the Veritas system (Data Source).
     This matches the expected schema from the Telemetry Ingestor description.
+
+    Attributes:
+        event_id: Unique identifier for the event.
+        timestamp: When the event occurred.
+        agent_id: ID of the agent generating the event.
+        session_id: Session ID associated with the event.
+        input_text: User input.
+        output_text: Model output.
+        metrics: Dictionary of metrics (latency, tokens, etc.).
+        metadata: Additional metadata (embeddings, flags, etc.).
     """
 
     event_id: str
@@ -34,6 +44,16 @@ class OTELSpan(BaseModel):
     """
     Represents an OpenTelemetry Span for ingestion.
     Simplified model focusing on fields relevant for Sentinel analysis.
+
+    Attributes:
+        trace_id: Unique 32-hex-character identifier for the trace.
+        span_id: Unique 16-hex-character identifier for the span.
+        name: Name of the operation (e.g., 'query_llm').
+        start_time_unix_nano: Start time in nanoseconds since epoch.
+        end_time_unix_nano: End time in nanoseconds since epoch.
+        attributes: Key-value pairs of span attributes.
+        status_code: Status code (UNSET, OK, ERROR).
+        status_message: Status description if error.
     """
 
     trace_id: str = Field(..., description="Unique 32-hex-character identifier for the trace.")
@@ -49,6 +69,12 @@ class OTELSpan(BaseModel):
 class GradeResult(BaseModel):
     """
     Represents the output from the Assay Grader.
+
+    Attributes:
+        faithfulness_score: Score (0.0-1.0) indicating how faithful the answer is to context.
+        retrieval_precision_score: Score (0.0-1.0) indicating relevance of retrieved docs.
+        safety_score: Score (0.0-1.0) indicating safety/toxicity.
+        details: Dictionary containing detailed grading info.
     """
 
     faithfulness_score: float
@@ -65,6 +91,13 @@ class VeritasClientProtocol(Protocol):
     def fetch_logs(self, agent_id: str, since: datetime) -> List[VeritasEvent]:
         """
         Fetches logs from the source of truth.
+
+        Args:
+            agent_id: The ID of the agent to fetch logs for.
+            since: The timestamp to fetch logs starting from.
+
+        Returns:
+            List[VeritasEvent]: A list of VeritasEvent objects.
         """
         ...
 
@@ -83,6 +116,12 @@ class AssayGraderProtocol(Protocol):
     def grade_conversation(self, conversation: Dict[str, Any]) -> GradeResult:
         """
         Sends a conversation to the Assay Judge for grading.
+
+        Args:
+            conversation: A dictionary containing 'input', 'output', and 'metadata'.
+
+        Returns:
+            GradeResult: The result of the grading process.
         """
         ...
 
@@ -95,15 +134,26 @@ class BaselineProviderProtocol(Protocol):
     def get_baseline_vectors(self, agent_id: str) -> List[List[float]]:
         """
         Retrieves the list of baseline vectors (embeddings) for the agent.
+
+        Args:
+            agent_id: The agent ID.
+
+        Returns:
+            List[List[float]]: A list of embedding vectors.
         """
         ...
 
     def get_baseline_output_length_distribution(self, agent_id: str) -> Tuple[List[float], List[float]]:
         """
         Retrieves the baseline output length distribution.
-        Returns a tuple: (probabilities, bin_edges).
-        - probabilities: List of float probabilities summing to 1.0.
-        - bin_edges: List of floats defining the bin edges (len(probabilities) + 1).
+
+        Args:
+            agent_id: The agent ID.
+
+        Returns:
+            Tuple[List[float], List[float]]: A tuple containing:
+                - probabilities: List of float probabilities summing to 1.0.
+                - bin_edges: List of floats defining the bin edges (len(probabilities) + 1).
         """
         ...
 

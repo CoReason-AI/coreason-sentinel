@@ -27,6 +27,7 @@ class DriftEngine:
     ) -> float:
         """
         Computes the Cosine Similarity between two vectors.
+
         Result range: [-1.0, 1.0]
         1.0: Identical direction
         0.0: Orthogonal
@@ -34,6 +35,16 @@ class DriftEngine:
 
         Note: scipy.spatial.distance.cosine returns Cosine DISTANCE (1 - similarity).
         So Similarity = 1 - Distance.
+
+        Args:
+            baseline: The baseline vector.
+            live: The live/observed vector.
+
+        Returns:
+            float: The cosine similarity between the two vectors.
+
+        Raises:
+            ValueError: If vectors have different dimensions.
         """
         # Ensure inputs are numpy arrays
         u = np.asarray(baseline, dtype=np.float64)
@@ -71,6 +82,9 @@ class DriftEngine:
 
         Returns:
             float: The divergence score (>= 0.0). 0.0 indicates identical distributions.
+
+        Raises:
+            ValueError: If distributions have different dimensions or contain negative values.
         """
         p = np.asarray(baseline, dtype=np.float64)
         q = np.asarray(live, dtype=np.float64)
@@ -96,16 +110,21 @@ class DriftEngine:
     def detect_vector_drift(cls, baseline_batch: List[List[float]], live_batch: List[List[float]]) -> float:
         """
         Detects drift between a batch of baseline vectors and a batch of live vectors.
-        This is a simplification. In reality, we might compare the centroid of live batch
-        to the centroid of baseline batch, or average pairwise distance.
 
-        For this implementation: We compute the Cosine Similarity between the
+        This implementation computes the Cosine Similarity between the
         CENTROID (mean) of the baseline batch and the CENTROID of the live batch.
 
+        Args:
+            baseline_batch: List of baseline vectors (embeddings).
+            live_batch: List of live vectors (embeddings).
+
         Returns:
-            drift_magnitude: 1.0 - similarity.
-            0.0 means no drift (centroids match).
-            1.0 means max drift (centroids orthogonal).
+            float: Drift magnitude (1.0 - similarity).
+                   0.0 means no drift (centroids match).
+                   1.0 means max drift (centroids orthogonal).
+
+        Raises:
+            ValueError: If batches are empty or dimensions mismatch.
         """
         if not baseline_batch or not live_batch:
             raise ValueError("Batches cannot be empty")

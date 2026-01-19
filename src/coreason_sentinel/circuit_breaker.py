@@ -26,15 +26,34 @@ from coreason_sentinel.utils.logger import logger
 
 
 class CircuitBreakerState(str, Enum):
-    CLOSED = "CLOSED"  # Normal operation
-    OPEN = "OPEN"  # Tripped, blocking traffic
-    HALF_OPEN = "HALF_OPEN"  # Testing recovery
+    """
+    Enum representing the possible states of the Circuit Breaker.
+
+    Attributes:
+        CLOSED: Normal operation. Traffic flows freely.
+        OPEN: Tripped state. Traffic is blocked.
+        HALF_OPEN: Recovery state. A trickle of traffic is allowed to test system health.
+    """
+
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
 
 
 class CircuitBreaker:
     """
     Manages the state of the Circuit Breaker for a specific agent.
-    Uses Redis for persistence to ensure stateless workers see the same state.
+
+    The Circuit Breaker acts as the "Enforcer" in the Watchtower architecture.
+    It monitors signals (Cost, Sentiment, Drift, etc.) and trips to OPEN if safety
+    limits are breached. It uses Redis for persistence to ensure stateless workers
+    share the same view of the agent's health.
+
+    Attributes:
+        redis (Redis): Redis client for state persistence and sliding window metrics.
+        config (SentinelConfig): Configuration for triggers and thresholds.
+        notification_service (NotificationServiceProtocol): Service to send critical alerts.
+        agent_id (str): The ID of the monitored agent.
     """
 
     def __init__(
@@ -43,6 +62,14 @@ class CircuitBreaker:
         config: SentinelConfig,
         notification_service: NotificationServiceProtocol,
     ):
+        """
+        Initializes the CircuitBreaker.
+
+        Args:
+            redis_client: A configured Redis client instance.
+            config: Configuration object containing rules and limits.
+            notification_service: Service to notify owners on critical state changes.
+        """
         self.redis = redis_client
         self.config = config
         self.notification_service = notification_service
@@ -53,8 +80,11 @@ class CircuitBreaker:
     def get_state(self) -> CircuitBreakerState:
         """
         Retrieves the current state from Redis.
-        Defaults to CLOSED if no state is recorded.
-        AUTO-TRANSITION: If state is OPEN and cooldown has expired, transitions to HALF_OPEN.
+
+        Handles auto-transition from OPEN to HALF_OPEN if the cooldown period has expired.
+
+        Returns:
+            CircuitBreakerState: The current state of the breaker (CLOSED, OPEN, or HALF_OPEN).
         """
         try:
             state_bytes = self.redis.get(self._state_key)
@@ -78,6 +108,15 @@ class CircuitBreaker:
     def set_state(self, state: CircuitBreakerState, reason: str | None = None) -> None:
         """
         Explicitly sets the circuit breaker state.
+
+        If transitioning to OPEN, it sets a cooldown key and triggers a critical alert.
+
+        Args:
+            state: The target state to set.
+            reason: Optional description of why the state change occurred.
+
+        Raises:
+            Exception: If there is an error communicating with Redis.
         """
         try:
             # Atomic set and get old value
@@ -110,9 +149,14 @@ class CircuitBreaker:
     def allow_request(self) -> bool:
         """
         Determines if a request should be allowed based on the current state.
-        CLOSED: Allow all.
-        OPEN: Block all.
-        HALF_OPEN: Allow 5% probabilistic trickle.
+
+        Logic:
+            - CLOSED: Allow all requests (Returns True).
+            - OPEN: Block all requests (Returns False).
+            - HALF_OPEN: Allow 5% probabilistic trickle to test recovery (Returns True 5% of time).
+
+        Returns:
+            bool: True if the request is allowed, False otherwise.
         """
         state = self.get_state()
 
@@ -129,7 +173,13 @@ class CircuitBreaker:
     def record_metric(self, metric_name: str, value: float = 1.0) -> None:
         """
         Records a metric event into a Redis Sorted Set (Sliding Window).
-        The score is the timestamp, the member is "{timestamp}:{value}:{uuid}".
+
+        The metric is stored with a timestamp score. Old metrics outside the
+        configured window are pruned to prevent memory leaks.
+
+        Args:
+            metric_name: The name of the metric (e.g., "latency", "cost").
+            value: The numerical value of the metric to record.
         """
         # Validate input (NaN/Inf check)
         if not math.isfinite(value):
@@ -162,8 +212,13 @@ class CircuitBreaker:
     def check_triggers(self) -> None:
         """
         Evaluates all configured triggers against the recorded metrics.
-        If a trigger is violated, trips the breaker to OPEN.
-        If in HALF_OPEN and no trigger is violated, transitions to CLOSED.
+
+        If a trigger condition is met (e.g., Latency > 10s), the breaker trips to OPEN.
+        If in HALF_OPEN state and no triggers are violated, it auto-recovers to CLOSED.
+
+        Side Effects:
+            - May change the Circuit Breaker state.
+            - Logs warnings/infos on state transitions.
         """
         state = self.get_state()
 
@@ -193,7 +248,14 @@ class CircuitBreaker:
 
     def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
         """
-        Returns True if the trigger condition is met (violation).
+        Evaluates a single trigger condition.
+
+        Args:
+            trigger: The trigger configuration to evaluate.
+            now: The current timestamp.
+
+        Returns:
+            bool: True if the trigger is violated, False otherwise.
         """
         key = f"sentinel:metrics:{self.agent_id}:{trigger.metric}"
         start_time = now - trigger.window_seconds
@@ -244,7 +306,15 @@ class CircuitBreaker:
     def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
         """
         Retrieves the most recent raw values for a given metric.
-        Useful for statistical analysis (e.g., constructing distributions).
+
+        Useful for statistical analysis (e.g., constructing distributions for drift detection).
+
+        Args:
+            metric_name: The name of the metric.
+            limit: The maximum number of recent values to retrieve.
+
+        Returns:
+            list[float]: A list of float values, ordered from newest to oldest.
         """
         key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
         try:
@@ -262,6 +332,9 @@ class CircuitBreaker:
     def get_health_report(self) -> HealthReport:
         """
         Generates a Health Report for the agent, aggregating metrics over the last hour.
+
+        Returns:
+            HealthReport: A snapshot object containing the current state and aggregated metrics.
         """
         state = self.get_state()
         metrics: dict[str, float] = {}
@@ -288,7 +361,13 @@ class CircuitBreaker:
     def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
         """
         Calculates the average value of a metric over the specified window.
-        Returns 0.0 if no data exists.
+
+        Args:
+            metric_name: The name of the metric.
+            window_seconds: The lookback window in seconds.
+
+        Returns:
+            float: The average value, or 0.0 if no data exists.
         """
         key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
         start_time = time.time() - window_seconds
@@ -307,6 +386,12 @@ class CircuitBreaker:
     def _parse_value_from_member(self, member: bytes) -> float:
         """
         Extracts value from "{timestamp}:{value}:{uuid}" member string.
+
+        Args:
+            member: The bytes member string from Redis.
+
+        Returns:
+            float: The extracted value, or 1.0 if parsing fails.
         """
         try:
             s = member.decode("utf-8")
