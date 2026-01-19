@@ -24,7 +24,10 @@ from coreason_sentinel.utils.logger import logger
 class TelemetryIngestor:
     """
     The Listener: Orchestrates the monitoring pipeline.
-    Routes events to Circuit Breaker, Spot Checker, and Drift Engine.
+
+    The Omni-Ingestor ingests both OTEL Spans (real-time traces) and Veritas Logs (long-term data).
+    It routes events to the Circuit Breaker for metric tracking and trigger evaluation,
+    to the Spot Checker for auditing, and to the Drift Engine for statistical analysis.
     """
 
     def __init__(
@@ -35,6 +38,16 @@ class TelemetryIngestor:
         baseline_provider: BaselineProviderProtocol,
         veritas_client: VeritasClientProtocol,
     ):
+        """
+        Initializes the TelemetryIngestor.
+
+        Args:
+            config: Configuration for ingestion rules.
+            circuit_breaker: Instance of CircuitBreaker to record metrics and check triggers.
+            spot_checker: Instance of SpotChecker to audit samples.
+            baseline_provider: Provider for baseline vectors and distributions for drift detection.
+            veritas_client: Client to fetch historical/batched logs.
+        """
         self.config = config
         self.circuit_breaker = circuit_breaker
         self.spot_checker = spot_checker
@@ -44,7 +57,12 @@ class TelemetryIngestor:
     def process_otel_span(self, span: OTELSpan) -> None:
         """
         Processes a single OpenTelemetry Span.
+
         Extracts Latency, Tokens, Cost, Sentiment, and Refusal metrics for Circuit Breaker monitoring.
+        This is the real-time ingestion path.
+
+        Args:
+            span: The OpenTelemetry span object to process.
         """
         logger.info(f"Processing OTEL Span {span.span_id} - {span.name}")
 
@@ -101,7 +119,14 @@ class TelemetryIngestor:
     def ingest_from_veritas_since(self, since: datetime) -> int:
         """
         Polls Veritas for logs since the given timestamp and processes them.
-        Returns the number of events processed.
+
+        This is the batch ingestion path.
+
+        Args:
+            since: The timestamp to fetch logs from.
+
+        Returns:
+            int: The number of events successfully processed.
         """
         try:
             events = self.veritas_client.fetch_logs(self.config.agent_id, since)
@@ -132,8 +157,12 @@ class TelemetryIngestor:
     def process_event(self, event: VeritasEvent) -> None:
         """
         Processes a single telemetry event from Veritas.
+
         This path is lightweight: Metrics extraction and Spot Checking only.
         Drift detection is offloaded to process_drift().
+
+        Args:
+            event: The VeritasEvent to process.
         """
         logger.info(f"Processing event {event.event_id} for agent {event.agent_id}")
 
@@ -175,8 +204,12 @@ class TelemetryIngestor:
     def process_drift(self, event: VeritasEvent) -> None:
         """
         Processes Drift Detection for a single event.
+
         Intended to be run asynchronously/in background.
         Calculates Vector, Output, and Relevance Drift.
+
+        Args:
+            event: The VeritasEvent to analyze for drift.
         """
         logger.info(f"Processing drift for event {event.event_id}")
 
@@ -223,6 +256,13 @@ class TelemetryIngestor:
     def _extract_custom_metrics(self, input_text: str, metadata: Dict[str, Any]) -> Dict[str, float]:
         """
         Extracts custom metrics based on metadata flags and regex patterns.
+
+        Args:
+            input_text: The user input text.
+            metadata: Event/Span metadata.
+
+        Returns:
+            Dict[str, float]: Extracted metrics (e.g., {"refusal_count": 1.0}).
         """
         metrics: Dict[str, float] = {}
 

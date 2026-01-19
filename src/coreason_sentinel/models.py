@@ -17,6 +17,13 @@ from pydantic import BaseModel, ConfigDict, Field
 class CircuitBreakerTrigger(BaseModel):
     """
     Defines a condition that triggers the Circuit Breaker.
+
+    Attributes:
+        metric: The name of the metric to monitor (e.g., 'faithfulness', 'latency', 'cost').
+        threshold: The value threshold that triggers the breaker.
+        window_seconds: The time window in seconds to evaluate the metric.
+        operator: Comparison operator ('>' or '<').
+        aggregation_method: How to aggregate the metric over the window (SUM, AVG, etc.).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -37,6 +44,12 @@ class CircuitBreakerTrigger(BaseModel):
 class ConditionalSamplingRule(BaseModel):
     """
     Defines a rule for conditional sampling based on event metadata.
+
+    Attributes:
+        metadata_key: The key in the metadata dictionary to check.
+        operator: The comparison operator (EQUALS, CONTAINS, EXISTS).
+        value: The value to compare against.
+        sample_rate: The sample rate to apply if the condition is met.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -50,6 +63,19 @@ class ConditionalSamplingRule(BaseModel):
 class SentinelConfig(BaseModel):
     """
     Configuration for the Sentinel monitor.
+
+    Attributes:
+        agent_id: Unique identifier for the agent being monitored.
+        owner_email: Email address for notifications.
+        phoenix_endpoint: Endpoint URL for Phoenix tracing.
+        sampling_rate: Fraction of traffic to sample (0.0 to 1.0).
+        drift_threshold_kl: KL Divergence threshold for output drift detection.
+        drift_sample_window: Number of recent samples to use for live distribution calculation.
+        cost_per_1k_tokens: Cost per 1000 tokens in USD.
+        recovery_timeout: Cooldown time in seconds before attempting recovery from OPEN state.
+        triggers: List of triggers that can trip the circuit breaker.
+        sentiment_regex_patterns: List of regex patterns to detect negative sentiment.
+        conditional_sampling_rules: List of rules to override sampling rate based on metadata.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -85,6 +111,11 @@ class SentinelConfig(BaseModel):
 class HealthReport(BaseModel):
     """
     A snapshot of the agent's health.
+
+    Attributes:
+        timestamp: Time of the report.
+        breaker_state: Current state of the Circuit Breaker.
+        metrics: Key-value pairs of current metrics.
     """
 
     model_config = ConfigDict(extra="forbid")
