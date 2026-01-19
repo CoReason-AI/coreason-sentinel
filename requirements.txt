@@ -1,0 +1,7 @@
+fastapi>=0.110.0
+loguru>=0.7.2
+numpy>=1.26.0
+pydantic>=2.7.0
+redis>=5.0.0
+scipy>=1.13.0
+uvicorn>=0.29.0
