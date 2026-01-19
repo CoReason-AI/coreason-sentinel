@@ -249,29 +249,30 @@ class TestTelemetryIngestorSync:
 
     def test_process_event_sync_without_portal(self) -> None:
         """Test fallback to anyio.run if not in context manager."""
-        with patch.object(self.ingestor._async, "process_event", new_callable=AsyncMock) as mock_process:
-            self.ingestor.process_event(self.event)
-            assert mock_process.await_count >= 1
+        # Using mock method on real async object to avoid complex patch issues
+        with patch.object(self.ingestor._async, "process_event", new_callable=AsyncMock):
+            # Should raise error now
+            with pytest.raises(RuntimeError):
+                self.ingestor.process_event(self.event)
 
     def test_process_otel_span_sync_without_portal(self) -> None:
         """Test fallback to anyio.run for process_otel_span."""
         from coreason_sentinel.interfaces import OTELSpan
 
         span = OTELSpan(trace_id="t1", span_id="s1", name="test", start_time_unix_nano=0, end_time_unix_nano=1)
-        with patch.object(self.ingestor._async, "process_otel_span", new_callable=AsyncMock) as mock_process:
-            self.ingestor.process_otel_span(span)
-            assert mock_process.await_count >= 1
+        with patch.object(self.ingestor._async, "process_otel_span", new_callable=AsyncMock):
+            with pytest.raises(RuntimeError):
+                self.ingestor.process_otel_span(span)
 
     def test_ingest_from_veritas_since_sync_without_portal(self) -> None:
         """Test fallback to anyio.run for ingest_from_veritas_since."""
         with patch.object(self.ingestor._async, "ingest_from_veritas_since", new_callable=AsyncMock) as mock_process:
             mock_process.return_value = 5
-            result = self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
-            assert result == 5
-            assert mock_process.await_count >= 1
+            with pytest.raises(RuntimeError):
+                self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
     def test_process_drift_sync_without_portal(self) -> None:
         """Test fallback to anyio.run for process_drift."""
-        with patch.object(self.ingestor._async, "process_drift", new_callable=AsyncMock) as mock_process:
-            self.ingestor.process_drift(self.event)
-            assert mock_process.await_count >= 1
+        with patch.object(self.ingestor._async, "process_drift", new_callable=AsyncMock):
+            with pytest.raises(RuntimeError):
+                self.ingestor.process_drift(self.event)

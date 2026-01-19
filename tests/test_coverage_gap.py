@@ -154,10 +154,14 @@ class TestSyncFacadeCoverage(unittest.TestCase):
         self.ingestor = TelemetryIngestor(self.config, self.mock_cb, self.mock_sc, self.mock_bp, self.mock_veritas)
 
     def test_ingest_from_veritas_since_sync(self) -> None:
-        """Cover 354: ingest_from_veritas_since facade."""
-        with patch("anyio.run") as mock_run:
-            self.ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
-            mock_run.assert_called_once()
-            # Assert arguments
-            args = mock_run.call_args
-            self.assertEqual(args[0][0], self.ingestor._async.ingest_from_veritas_since)
+        """Cover ingest_from_veritas_since facade with context manager."""
+        with patch.object(self.ingestor, "_async") as mock_async:
+            mock_async.ingest_from_veritas_since = AsyncMock(return_value=10)
+            mock_async.__aenter__ = AsyncMock()
+            mock_async.__aexit__ = AsyncMock()
+
+            with self.ingestor as svc:
+                result = svc.ingest_from_veritas_since(datetime.now(timezone.utc))
+                assert result == 10
+
+            assert mock_async.ingest_from_veritas_since.call_count == 1
