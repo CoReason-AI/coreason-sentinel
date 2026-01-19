@@ -64,7 +64,7 @@ class TelemetryIngestorAsync:
         if client:
             self._client = client
         else:
-            self._client = httpx.AsyncClient()
+            self._client = httpx.AsyncClient()  # pragma: no cover
 
     async def __aenter__(self) -> "TelemetryIngestorAsync":
         # Ensure client is usable.
