@@ -76,7 +76,6 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 omit = ["tests/*"]
-concurrency = ["thread", "multiprocessing"]
 
 [tool.coverage.report]
 exclude_lines = [
