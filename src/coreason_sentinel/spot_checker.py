@@ -23,6 +23,10 @@ from coreason_sentinel.utils.logger import logger
 class SpotChecker:
     """
     The Auditor: Responsible for sampling and grading live traffic.
+
+    It determines whether a specific request should be audited based on sampling rates
+    and conditional rules (e.g., "Sample 100% of negative sentiment").
+    If sampled, it sends the conversation to the Assay Grader for detailed evaluation.
     """
 
     def __init__(
@@ -31,6 +35,14 @@ class SpotChecker:
         grader: AssayGraderProtocol,
         phoenix_client: PhoenixClientProtocol,
     ):
+        """
+        Initializes the SpotChecker.
+
+        Args:
+            config: Configuration defining sampling rates and rules.
+            grader: Service to perform grading (Assay).
+            phoenix_client: Service to update traces with grade results.
+        """
         self.config = config
         self.grader = grader
         self.phoenix_client = phoenix_client
@@ -38,7 +50,14 @@ class SpotChecker:
     def should_sample(self, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """
         Determines if a request should be sampled for grading.
+
         Calculates effective sample rate based on global config and conditional rules.
+
+        Args:
+            metadata: Metadata associated with the request (used for conditional rules).
+
+        Returns:
+            bool: True if the request should be sampled, False otherwise.
         """
         if not metadata:
             metadata = {}
@@ -56,6 +75,13 @@ class SpotChecker:
     def _evaluate_rule(self, rule: ConditionalSamplingRule, metadata: Dict[str, Any]) -> bool:
         """
         Evaluates a single conditional sampling rule against the metadata.
+
+        Args:
+            rule: The rule to evaluate.
+            metadata: The metadata to check against.
+
+        Returns:
+            bool: True if the rule condition is met.
         """
         if rule.operator == "EXISTS":
             return rule.metadata_key in metadata
@@ -80,6 +106,14 @@ class SpotChecker:
     def check_sample(self, conversation: Dict[str, Any]) -> Optional[GradeResult]:
         """
         Sends the conversation to the Assay Grader.
+
+        If successful, it also updates the corresponding trace in Phoenix with the grade results.
+
+        Args:
+            conversation: The conversation data (input, output, metadata).
+
+        Returns:
+            Optional[GradeResult]: The grade result if successful, None otherwise.
         """
         try:
             logger.info(f"Spot Checking conversation for agent {self.config.agent_id}")

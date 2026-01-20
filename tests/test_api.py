@@ -10,12 +10,12 @@
 
 import time
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from coreason_sentinel.ingestor import TelemetryIngestor
+from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.main import app, get_telemetry_ingestor
 
 client = TestClient(app)
@@ -27,15 +27,21 @@ def test_health_check() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_get_telemetry_ingestor_default() -> None:
+@pytest.mark.asyncio
+async def test_get_telemetry_ingestor_default() -> None:
     """Test that the default dependency raises NotImplementedError."""
     with pytest.raises(NotImplementedError, match="TelemetryIngestor dependency must be overridden"):
-        get_telemetry_ingestor()
+        await get_telemetry_ingestor()
 
 
 def test_ingest_otel_span_success() -> None:
     # Mock the ingestor
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
+    # process_otel_span is async, so we need AsyncMock if we were awaiting it,
+    # but background tasks might just call it?
+    # FastAPI background tasks on async functions need to be awaited by Starlette/FastAPI.
+    # MagicMock is not awaitable unless we configure it.
+    mock_ingestor.process_otel_span = AsyncMock()
 
     # Override the dependency
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -68,7 +74,8 @@ def test_ingest_otel_span_success() -> None:
 
 
 def test_ingest_otel_span_invalid_data() -> None:
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
+    mock_ingestor.process_otel_span = AsyncMock()
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
     try:
@@ -83,7 +90,8 @@ def test_ingest_otel_span_invalid_data() -> None:
 
 def test_ingest_otel_span_bad_type() -> None:
     """Edge Case: Sending a string where an int is expected."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
+    mock_ingestor.process_otel_span = AsyncMock()
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
     try:
@@ -105,7 +113,8 @@ def test_ingest_otel_span_bad_type() -> None:
 
 def test_ingest_otel_span_malformed_attributes() -> None:
     """Edge Case: Sending a string instead of a dictionary for attributes."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
+    mock_ingestor.process_otel_span = AsyncMock()
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
     try:
@@ -127,9 +136,9 @@ def test_ingest_otel_span_malformed_attributes() -> None:
 
 def test_ingest_otel_span_background_exception() -> None:
     """Edge Case: Ensure API returns 202 even if background task fails (mocked)."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
     # Simulate an error inside the ingestor
-    mock_ingestor.process_otel_span.side_effect = ValueError("Something exploded!")
+    mock_ingestor.process_otel_span = AsyncMock(side_effect=ValueError("Something exploded!"))
 
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
@@ -158,7 +167,8 @@ def test_ingest_otel_span_background_exception() -> None:
 
 def test_complex_batch_ingestion() -> None:
     """Complex Scenario: Simulate a batch of 10 requests."""
-    mock_ingestor = MagicMock(spec=TelemetryIngestor)
+    mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
+    mock_ingestor.process_otel_span = AsyncMock()
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
 
     try:
