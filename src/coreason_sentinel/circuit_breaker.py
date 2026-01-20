@@ -18,7 +18,7 @@ from datetime import datetime
 from enum import Enum
 
 import numpy as np
-from redis import Redis
+from redis.asyncio import Redis
 
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
@@ -77,7 +77,7 @@ class CircuitBreaker:
         self._state_key = f"sentinel:breaker:{self.agent_id}:state"
         self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
 
-    def get_state(self) -> CircuitBreakerState:
+    async def get_state(self) -> CircuitBreakerState:
         """
         Retrieves the current state from Redis.
 
@@ -87,7 +87,7 @@ class CircuitBreaker:
             CircuitBreakerState: The current state of the breaker (CLOSED, OPEN, or HALF_OPEN).
         """
         try:
-            state_bytes = self.redis.get(self._state_key)
+            state_bytes = await self.redis.get(self._state_key)
             if state_bytes is None:
                 return CircuitBreakerState.CLOSED
 
@@ -95,9 +95,9 @@ class CircuitBreaker:
 
             if state == CircuitBreakerState.OPEN:
                 # Check cooldown
-                if not self.redis.exists(self._cooldown_key):
+                if not await self.redis.exists(self._cooldown_key):
                     logger.info(f"Cooldown expired for {self.agent_id}. Transitioning to HALF_OPEN.")
-                    self.set_state(CircuitBreakerState.HALF_OPEN)
+                    await self.set_state(CircuitBreakerState.HALF_OPEN)
                     return CircuitBreakerState.HALF_OPEN
 
             return state
@@ -105,7 +105,7 @@ class CircuitBreaker:
             logger.error(f"Failed to fetch circuit breaker state from Redis: {e}")
             return CircuitBreakerState.CLOSED
 
-    def set_state(self, state: CircuitBreakerState, reason: str | None = None) -> None:
+    async def set_state(self, state: CircuitBreakerState, reason: str | None = None) -> None:
         """
         Explicitly sets the circuit breaker state.
 
@@ -120,7 +120,7 @@ class CircuitBreaker:
         """
         try:
             # Atomic set and get old value
-            old_state_bytes = self.redis.getset(self._state_key, state.value)
+            old_state_bytes = await self.redis.getset(self._state_key, state.value)
 
             # Determine if we are effectively transitioning to OPEN
             # We treat None (missing key) as CLOSED.
@@ -128,7 +128,7 @@ class CircuitBreaker:
 
             if state == CircuitBreakerState.OPEN and not was_open:
                 # Set cooldown
-                self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
+                await self.redis.setex(self._cooldown_key, self.config.recovery_timeout, "1")
                 # Send Critical Alert
                 if self.config.owner_email:
                     alert_reason = reason or "Circuit Breaker Tripped (Manual or Unknown)"
@@ -146,7 +146,7 @@ class CircuitBreaker:
             logger.error(f"Failed to set circuit breaker state in Redis: {e}")
             raise e
 
-    def allow_request(self) -> bool:
+    async def allow_request(self) -> bool:
         """
         Determines if a request should be allowed based on the current state.
 
@@ -158,7 +158,7 @@ class CircuitBreaker:
         Returns:
             bool: True if the request is allowed, False otherwise.
         """
-        state = self.get_state()
+        state = await self.get_state()
 
         if state == CircuitBreakerState.CLOSED:
             return True
@@ -170,7 +170,7 @@ class CircuitBreaker:
 
         return True  # Fallback
 
-    def record_metric(self, metric_name: str, value: float = 1.0) -> None:
+    async def record_metric(self, metric_name: str, value: float = 1.0) -> None:
         """
         Records a metric event into a Redis Sorted Set (Sliding Window).
 
@@ -193,7 +193,7 @@ class CircuitBreaker:
 
         try:
             # Add event to sorted set
-            self.redis.zadd(key, {member: timestamp})
+            await self.redis.zadd(key, {member: timestamp})
 
             # Prune old metrics to prevent memory leak
             max_window = 3600  # Default 1 hour
@@ -203,13 +203,13 @@ class CircuitBreaker:
 
             # Remove elements older than the window
             min_score = timestamp - max_window
-            self.redis.zremrangebyscore(key, "-inf", min_score)
+            await self.redis.zremrangebyscore(key, "-inf", min_score)
 
-            self.redis.expire(key, max_window * 2)
+            await self.redis.expire(key, max_window * 2)
         except Exception as e:
             logger.error(f"Failed to record metric {metric_name}: {e}")
 
-    def check_triggers(self) -> None:
+    async def check_triggers(self) -> None:
         """
         Evaluates all configured triggers against the recorded metrics.
 
@@ -223,7 +223,7 @@ class CircuitBreaker:
         Raises:
             Exception: Propagates any internal Redis errors during state transition or metric retrieval.
         """
-        state = self.get_state()
+        state = await self.get_state()
 
         if state == CircuitBreakerState.OPEN:
             return
@@ -232,13 +232,13 @@ class CircuitBreaker:
         violation = False
 
         for trigger in self.config.triggers:
-            if self._evaluate_trigger(trigger, now):
+            if await self._evaluate_trigger(trigger, now):
                 reason = (
                     f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
                     f"in last {trigger.window_seconds}s"
                 )
                 logger.warning(f"{reason}. Tripping Circuit Breaker.")
-                self.set_state(CircuitBreakerState.OPEN, reason=reason)
+                await self.set_state(CircuitBreakerState.OPEN, reason=reason)
                 violation = True
                 return
 
@@ -247,9 +247,9 @@ class CircuitBreaker:
             # If we are here, it means no triggers were violated.
             # We assume the trickle traffic was successful.
             logger.info(f"Circuit Breaker for {self.agent_id} recovering to CLOSED.")
-            self.set_state(CircuitBreakerState.CLOSED)
+            await self.set_state(CircuitBreakerState.CLOSED)
 
-    def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
+    async def _evaluate_trigger(self, trigger: CircuitBreakerTrigger, now: float) -> bool:
         """
         Evaluates a single trigger condition.
 
@@ -266,7 +266,7 @@ class CircuitBreaker:
         try:
             # Get events within window
             # zrangebyscore returns list of members
-            events = self.redis.zrangebyscore(key, start_time, "+inf")
+            events = await self.redis.zrangebyscore(key, start_time, "+inf")
             if not events:
                 # If no events, we consider value 0.0 for SUM/COUNT, but for AVG/MIN/MAX it's undefined.
                 # Usually we don't trip if no data.
@@ -306,7 +306,7 @@ class CircuitBreaker:
             logger.error(f"Failed to evaluate trigger {trigger.metric}: {e}")
             return False
 
-    def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
+    async def get_recent_values(self, metric_name: str, limit: int = 100) -> list[float]:
         """
         Retrieves the most recent raw values for a given metric.
 
@@ -323,7 +323,7 @@ class CircuitBreaker:
         try:
             # Get the last `limit` elements from the sorted set
             # zrevrange returns elements in descending order of score (newest first)
-            events = self.redis.zrevrange(key, 0, limit - 1)
+            events = await self.redis.zrevrange(key, 0, limit - 1)
             if not events:
                 return []
 
@@ -332,28 +332,28 @@ class CircuitBreaker:
             logger.error(f"Failed to fetch recent values for {metric_name}: {e}")
             return []
 
-    def get_health_report(self) -> HealthReport:
+    async def get_health_report(self) -> HealthReport:
         """
         Generates a Health Report for the agent, aggregating metrics over the last hour.
 
         Returns:
             HealthReport: A snapshot object containing the current state and aggregated metrics.
         """
-        state = self.get_state()
+        state = await self.get_state()
         metrics: dict[str, float] = {}
 
         # Default metrics to aggregate
         # 1. Avg Latency (1h)
-        metrics["avg_latency"] = self._calculate_metric_average("latency", window_seconds=3600)
+        metrics["avg_latency"] = await self._calculate_metric_average("latency", window_seconds=3600)
 
         # 2. Faithfulness (1h) - Average score
-        metrics["faithfulness"] = self._calculate_metric_average("faithfulness", window_seconds=3600)
+        metrics["faithfulness"] = await self._calculate_metric_average("faithfulness", window_seconds=3600)
 
         # 3. Cost Per Query (1h) - Average cost per event
-        metrics["cost_per_query"] = self._calculate_metric_average("cost", window_seconds=3600)
+        metrics["cost_per_query"] = await self._calculate_metric_average("cost", window_seconds=3600)
 
         # 4. KL Divergence (1h) - Average drift score
-        metrics["kl_divergence"] = self._calculate_metric_average("output_drift_kl", window_seconds=3600)
+        metrics["kl_divergence"] = await self._calculate_metric_average("output_drift_kl", window_seconds=3600)
 
         return HealthReport(
             timestamp=datetime.fromtimestamp(time.time()),
@@ -361,7 +361,7 @@ class CircuitBreaker:
             metrics=metrics,
         )
 
-    def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
+    async def _calculate_metric_average(self, metric_name: str, window_seconds: int = 3600) -> float:
         """
         Calculates the average value of a metric over the specified window.
 
@@ -375,7 +375,7 @@ class CircuitBreaker:
         key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
         start_time = time.time() - window_seconds
         try:
-            events = self.redis.zrangebyscore(key, start_time, "+inf")
+            events = await self.redis.zrangebyscore(key, start_time, "+inf")
             if not events:
                 return 0.0
 

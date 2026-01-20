@@ -9,7 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,9 @@ class TestIngestorRelevanceDrift:
             phoenix_endpoint="http://localhost:6006",
         )
         breaker = MagicMock(spec=CircuitBreaker)
+        breaker.record_metric = AsyncMock()
+        breaker.check_triggers = AsyncMock()
+
         spot_checker = MagicMock()
         baseline_provider = MagicMock()
         veritas_client = MagicMock()
@@ -49,10 +52,20 @@ class TestIngestorRelevanceDrift:
             metadata={"query_embedding": [1.0, 0.0], "response_embedding": [0.0, 1.0]},
         )
 
-        ingestor.process_drift(event)
+        with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+            with ingestor:
+                ingestor.process_drift(event)
 
         # Verify relevance_drift was recorded
         # Orthogonal vectors -> Drift 1.0
+        # Wait, if using `with ingestor`, it runs in portal thread.
+        # MagicMock isn't thread-safe for assertions if race condition, but usually ok for simple tests.
+        # But wait, `ingestor` (sync) calls `process_drift` via portal.
+        # `process_drift` (async) calls `await breaker.record_metric`.
+        # `breaker.record_metric` is `AsyncMock`.
+
+        # We need to wait for completion? Portal.call blocks. So it is done.
+
         breaker.record_metric.assert_any_call("relevance_drift", 1.0)
 
     def test_process_event_skips_missing_embeddings(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
@@ -72,7 +85,9 @@ class TestIngestorRelevanceDrift:
             },
         )
 
-        ingestor.process_drift(event)
+        with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+            with ingestor:
+                ingestor.process_drift(event)
 
         # Should not record relevance_drift
         calls = [call.args[0] for call in breaker.record_metric.call_args_list]
@@ -98,7 +113,9 @@ class TestIngestorRelevanceDrift:
         )
 
         # Should not raise exception
-        ingestor.process_drift(event)
+        with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
+            with ingestor:
+                ingestor.process_drift(event)
 
         # Should not record relevance_drift
         calls = [call.args[0] for call in breaker.record_metric.call_args_list]

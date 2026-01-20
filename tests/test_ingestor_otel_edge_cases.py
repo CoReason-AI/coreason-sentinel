@@ -8,39 +8,42 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
-from unittest.mock import MagicMock
+import unittest
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from coreason_sentinel.ingestor import TelemetryIngestor
+from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import OTELSpan
 from coreason_sentinel.models import SentinelConfig
 
 
-class TestOTELSpanIngestionEdgeCases:
-    @pytest.fixture
-    def mock_components(self) -> tuple[TelemetryIngestor, MagicMock]:
-        config = SentinelConfig(
+@pytest.mark.asyncio
+class TestOTELSpanIngestionEdgeCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.config = SentinelConfig(
             agent_id="test-agent-otel-edge",
             owner_email="test@example.com",
             phoenix_endpoint="http://localhost:6006",
             cost_per_1k_tokens=0.01,
         )
-        circuit_breaker = MagicMock()
-        spot_checker = MagicMock()
-        baseline_provider = MagicMock()
-        veritas_client = MagicMock()
+        self.circuit_breaker = MagicMock()
+        self.circuit_breaker.record_metric = AsyncMock()
+        self.circuit_breaker.check_triggers = AsyncMock()
 
-        ingestor = TelemetryIngestor(config, circuit_breaker, spot_checker, baseline_provider, veritas_client)
-        return ingestor, circuit_breaker
+        self.spot_checker = MagicMock()
+        self.baseline_provider = MagicMock()
+        self.veritas_client = MagicMock()
 
-    def test_non_string_prompt_list(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+        self.ingestor = TelemetryIngestorAsync(
+            self.config, self.circuit_breaker, self.spot_checker, self.baseline_provider, self.veritas_client
+        )
+
+    async def test_non_string_prompt_list(self) -> None:
         """
         Test that a list-based prompt (e.g. list of messages) is converted to string
         and regex still finds the pattern.
         """
-        ingestor, circuit_breaker = mock_components
-
         # "STOP" is inside the list strings
         attributes = {"gen_ai.prompt": ["User: Hello", "System: STOP that"]}
 
@@ -53,20 +56,18 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
+        await self.ingestor.process_otel_span(span)
 
         # str(["...", "STOP..."]) -> "['...', 'STOP...']"
         # Regex "STOP" should match.
-        circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
 
-    def test_attribute_precedence_masking(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+    async def test_attribute_precedence_masking(self) -> None:
         """
         Test that gen_ai.prompt takes precedence over llm.input_messages.
         If gen_ai.prompt is clean, but llm.input_messages has 'STOP', logic should use gen_ai.prompt
         and thus record NO sentiment.
         """
-        ingestor, circuit_breaker = mock_components
-
         attributes = {
             "gen_ai.prompt": "Everything is fine here",
             "llm.input_messages": "Please STOP this madness",
@@ -81,16 +82,14 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
+        await self.ingestor.process_otel_span(span)
 
         # Should NOT record sentiment because prioritized source is clean
-        calls = [c[0][0] for c in circuit_breaker.record_metric.call_args_list]
+        calls = [c[0][0] for c in self.circuit_breaker.record_metric.call_args_list]
         assert "sentiment_frustration_count" not in calls
 
-    def test_refusal_truthiness_integer(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+    async def test_refusal_truthiness_integer(self) -> None:
         """Test that integer 1 counts as True for refusal."""
-        ingestor, circuit_breaker = mock_components
-
         attributes = {"is_refusal": 1}
 
         span = OTELSpan(
@@ -102,10 +101,10 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
-        circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+        await self.ingestor.process_otel_span(span)
+        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
 
-    def test_refusal_truthiness_string_false(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+    async def test_refusal_truthiness_string_false(self) -> None:
         """
         Test behavior with string "False".
         Current implementation uses `if metadata.get("is_refusal"):`.
@@ -114,8 +113,6 @@ class TestOTELSpanIngestionEdgeCases:
         If this is undesirable, code must change.
         For now, we assert the CURRENT behavior to ensure we know if it changes.
         """
-        ingestor, circuit_breaker = mock_components
-
         attributes = {"is_refusal": "False"}
 
         span = OTELSpan(
@@ -127,15 +124,13 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
+        await self.ingestor.process_otel_span(span)
 
         # It SHOULD record refusal count because "False" is True in boolean context
-        circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
 
-    def test_large_input_text(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+    async def test_large_input_text(self) -> None:
         """Test processing with a large text payload to ensure no crashes."""
-        ingestor, circuit_breaker = mock_components
-
         # Create 1MB string
         large_text = "word " * 200000 + "STOP"
 
@@ -150,14 +145,12 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
+        await self.ingestor.process_otel_span(span)
 
-        circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
 
-    def test_missing_prompt_attributes(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
+    async def test_missing_prompt_attributes(self) -> None:
         """Test span with NO prompt attributes handled gracefully."""
-        ingestor, circuit_breaker = mock_components
-
         attributes = {"some.other.attr": "value"}
 
         span = OTELSpan(
@@ -169,8 +162,8 @@ class TestOTELSpanIngestionEdgeCases:
             attributes=attributes,
         )
 
-        ingestor.process_otel_span(span)
+        await self.ingestor.process_otel_span(span)
 
         # No crash, no metrics (except latency)
-        calls = [c[0][0] for c in circuit_breaker.record_metric.call_args_list]
+        calls = [c[0][0] for c in self.circuit_breaker.record_metric.call_args_list]
         assert "sentiment_frustration_count" not in calls
