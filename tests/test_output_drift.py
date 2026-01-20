@@ -48,7 +48,7 @@ class TestOutputDriftDetection(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.expire = AsyncMock()
         self.mock_redis.zrevrange = AsyncMock()
         self.mock_redis.zrangebyscore = AsyncMock()
-        self.mock_redis.get = AsyncMock()
+        self.mock_redis.get = AsyncMock(return_value=b"CLOSED")
         self.mock_redis.getset = AsyncMock()
         self.mock_redis.setex = AsyncMock()
         self.mock_redis.exists = AsyncMock()

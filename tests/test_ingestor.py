@@ -73,6 +73,30 @@ class TestTelemetryIngestorAsync(unittest.IsolatedAsyncioTestCase):
         assert not external_client.is_closed
         await external_client.aclose()
 
+    async def test_ingestor_async_client_resurrection(self) -> None:
+        """Test that the client is recreated if closed upon re-entry."""
+        config = SentinelConfig(
+            agent_id="test",
+            owner_email="test@example.com",
+            phoenix_endpoint="http://localhost:6006",
+            triggers=[],
+        )
+        mock_cb = MagicMock(spec=CircuitBreaker)
+        mock_sc = MagicMock(spec=SpotChecker)
+        mock_bp = MagicMock(spec=BaselineProviderProtocol)
+        mock_veritas = MagicMock(spec=VeritasClientProtocol)
+
+        ingestor = TelemetryIngestorAsync(config, mock_cb, mock_sc, mock_bp, mock_veritas)
+
+        # Close the default client manually
+        await ingestor._client.aclose()
+        assert ingestor._client.is_closed
+
+        # Re-enter context - should trigger resurrection logic
+        async with ingestor:
+            assert not ingestor._client.is_closed
+            assert ingestor._client is not None
+
     async def test_ingest_from_veritas_triggers_drift_logic(self) -> None:
         config = SentinelConfig(
             agent_id="test-agent",

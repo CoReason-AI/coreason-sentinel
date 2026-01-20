@@ -26,7 +26,7 @@ class TestCircuitBreakerState(unittest.IsolatedAsyncioTestCase):
         self.mock_redis = MagicMock(spec=Redis)
         # Mock async methods on Redis
         self.mock_redis.get = AsyncMock()
-        self.mock_redis.getset = AsyncMock()
+        self.mock_redis.getset = AsyncMock(return_value=b"CLOSED")
         self.mock_redis.setex = AsyncMock()
         self.mock_redis.exists = AsyncMock()
         self.mock_redis.zadd = AsyncMock()
@@ -183,7 +183,7 @@ class TestCircuitBreakerLogic(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
         self.mock_redis.get = AsyncMock()
-        self.mock_redis.getset = AsyncMock()
+        self.mock_redis.getset = AsyncMock(return_value=b"CLOSED")
         self.mock_redis.setex = AsyncMock()
         self.mock_redis.exists = AsyncMock()
         self.mock_redis.zadd = AsyncMock()
@@ -473,7 +473,7 @@ class TestCircuitBreakerComplexScenarios(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
         self.mock_redis.get = AsyncMock()
-        self.mock_redis.getset = AsyncMock()
+        self.mock_redis.getset = AsyncMock(return_value=b"CLOSED")
         self.mock_redis.setex = AsyncMock()
         self.mock_redis.exists = AsyncMock()
         self.mock_redis.zadd = AsyncMock()
