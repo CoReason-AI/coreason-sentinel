@@ -12,16 +12,16 @@ from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI
 
-from coreason_sentinel.ingestor import TelemetryIngestor
+from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import OTELSpan
 from coreason_sentinel.utils.logger import logger
 
 app = FastAPI(title="CoReason Sentinel", version="0.1.0")
 
 
-def get_telemetry_ingestor() -> TelemetryIngestor:
+async def get_telemetry_ingestor() -> TelemetryIngestorAsync:
     """
-    Dependency to provide the TelemetryIngestor instance.
+    Dependency to provide the TelemetryIngestorAsync instance.
 
     In a real deployment, this would initialize the full object graph
     (Redis, Veritas Client, etc.) based on configuration.
@@ -34,7 +34,7 @@ def get_telemetry_ingestor() -> TelemetryIngestor:
 
 
 @app.get("/health")  # type: ignore[misc]
-def health_check() -> dict[str, str]:
+async def health_check() -> dict[str, str]:
     """
     Health check endpoint.
 
@@ -45,10 +45,10 @@ def health_check() -> dict[str, str]:
 
 
 @app.post("/ingest/otel/span", status_code=202)  # type: ignore[misc]
-def ingest_otel_span(
+async def ingest_otel_span(
     span: OTELSpan,
     background_tasks: BackgroundTasks,
-    ingestor: Annotated[TelemetryIngestor, Depends(get_telemetry_ingestor)],
+    ingestor: Annotated[TelemetryIngestorAsync, Depends(get_telemetry_ingestor)],
 ) -> dict[str, str]:
     """
     Ingests a single OpenTelemetry span.

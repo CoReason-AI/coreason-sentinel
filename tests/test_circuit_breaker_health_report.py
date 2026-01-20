@@ -10,18 +10,24 @@
 
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
-from redis import Redis
+import pytest
+from redis.asyncio import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import HealthReport, SentinelConfig
 
 
-class TestCircuitBreakerHealthReport(unittest.TestCase):
-    def setUp(self) -> None:
+@pytest.mark.asyncio
+class TestCircuitBreakerHealthReport(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
+        self.mock_redis.get = AsyncMock()
+        self.mock_redis.zrangebyscore = AsyncMock()
+        self.mock_redis.exists = AsyncMock()
+
         self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         self.config = SentinelConfig(
             agent_id="test-agent",
@@ -31,13 +37,13 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
         )
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
-    def test_get_health_report_structure(self) -> None:
+    async def test_get_health_report_structure(self) -> None:
         """Test that get_health_report returns a valid HealthReport object."""
         self.mock_redis.get.return_value = b"CLOSED"
         # Mock empty lists for metrics
         self.mock_redis.zrangebyscore.return_value = []
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         self.assertIsInstance(report, HealthReport)
         self.assertEqual(report.breaker_state, "CLOSED")
@@ -47,7 +53,7 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
         for key in expected_keys:
             self.assertIn(key, report.metrics)
 
-    def test_get_health_report_calculation(self) -> None:
+    async def test_get_health_report_calculation(self) -> None:
         """Test that metrics are correctly averaged."""
         self.mock_redis.get.return_value = b"CLOSED"
         now = time.time()
@@ -58,7 +64,7 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
         # Cost: 0.01, 0.03 -> Avg 0.02
         # KL: 0.2, 0.4 -> Avg 0.3
 
-        def zrange_side_effect(key: str, min_score: float | str, max_score: float | str) -> list[bytes]:
+        async def zrange_side_effect(key: str, min_score: float | str, max_score: float | str) -> list[bytes]:
             if "latency" in key:
                 return [f"{now}:0.1:id1".encode(), f"{now}:0.3:id2".encode()]
             if "faithfulness" in key:
@@ -71,14 +77,14 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
 
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         self.assertAlmostEqual(report.metrics["avg_latency"], 0.2)
         self.assertAlmostEqual(report.metrics["faithfulness"], 0.95)
         self.assertAlmostEqual(report.metrics["cost_per_query"], 0.02)
         self.assertAlmostEqual(report.metrics["kl_divergence"], 0.3)
 
-    def test_get_health_report_window(self) -> None:
+    async def test_get_health_report_window(self) -> None:
         """Test that metrics respect the 1-hour window."""
         self.mock_redis.get.return_value = b"CLOSED"
 
@@ -88,7 +94,7 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
         now = time.time()
         # Patch time to control 'now'
         with unittest.mock.patch("time.time", return_value=now):
-            self.breaker.get_health_report()
+            await self.breaker.get_health_report()
 
             # Check arguments for one of the calls
             # Expected start time is now - 3600
@@ -107,36 +113,36 @@ class TestCircuitBreakerHealthReport(unittest.TestCase):
                     break
             self.assertTrue(found, "Latency metric not queried")
 
-    def test_get_health_report_empty_metrics(self) -> None:
+    async def test_get_health_report_empty_metrics(self) -> None:
         """Test that empty metrics default to 0.0."""
         self.mock_redis.get.return_value = b"CLOSED"
         self.mock_redis.zrangebyscore.return_value = []
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         self.assertEqual(report.metrics["avg_latency"], 0.0)
         self.assertEqual(report.metrics["faithfulness"], 0.0)
         self.assertEqual(report.metrics["cost_per_query"], 0.0)
         self.assertEqual(report.metrics["kl_divergence"], 0.0)
 
-    def test_get_health_report_state_handling(self) -> None:
+    async def test_get_health_report_state_handling(self) -> None:
         """Test that the current state is correctly reflected."""
         self.mock_redis.get.return_value = b"OPEN"
-        # We need to ensure get_state handles the logic (cooldown etc)
-        # But here we mock redis.get, and get_state logic might transition.
-        # Let's mock get_state directly if we want to isolate report generation
-        # But testing integration with get_state is better.
-
         # If open and cooldown exists
         self.mock_redis.exists.return_value = 1
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
         self.assertEqual(report.breaker_state, "OPEN")
 
 
-class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
-    def setUp(self) -> None:
+@pytest.mark.asyncio
+class TestCircuitBreakerHealthReportEdgeCases(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
         self.mock_redis = MagicMock(spec=Redis)
+        self.mock_redis.get = AsyncMock()
+        self.mock_redis.zrangebyscore = AsyncMock()
+        self.mock_redis.exists = AsyncMock()
+
         self.mock_notification_service = MagicMock(spec=NotificationServiceProtocol)
         self.config = SentinelConfig(
             agent_id="test-agent",
@@ -146,7 +152,7 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         )
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
 
-    def test_zero_values(self) -> None:
+    async def test_zero_values(self) -> None:
         """
         Verify that valid 0.0 values (e.g. 0 cost) are correctly averaged
         and not treated as missing data.
@@ -159,19 +165,19 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         members = [f"{now}:0.0:id1".encode(), f"{now}:0.0:id2".encode(), f"{now}:3.0:id3".encode()]
 
         # Return these members for 'cost' metric
-        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+        async def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
             if "cost" in key:
                 return members
             return []
 
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         self.assertAlmostEqual(report.metrics["cost_per_query"], 1.0)
         self.assertEqual(len(members), 3)
 
-    def test_mixed_valid_and_malformed_data(self) -> None:
+    async def test_mixed_valid_and_malformed_data(self) -> None:
         """
         Verify behavior when Redis contains malformed data.
         Current implementation fallback is 1.0.
@@ -182,26 +188,26 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         # 1 valid (4.0), 1 malformed (defaults to 1.0). Average -> 2.5
         members = [f"{now}:4.0:id1".encode(), b"malformed_data"]
 
-        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+        async def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
             if "faithfulness" in key:
                 return members
             return []
 
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         # Expect 2.5 because malformed -> 1.0
         self.assertAlmostEqual(report.metrics["faithfulness"], 2.5)
 
-    def test_sparse_metrics(self) -> None:
+    async def test_sparse_metrics(self) -> None:
         """
         Verify report generation when only one metric type exists.
         """
         self.mock_redis.get.return_value = b"CLOSED"
         now = time.time()
 
-        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+        async def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
             if "avg_latency" in key or "latency" in key:
                 return [f"{now}:0.5:id1".encode()]
             # Others return empty
@@ -209,13 +215,13 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
 
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
 
         self.assertAlmostEqual(report.metrics["avg_latency"], 0.5)
         self.assertEqual(report.metrics["faithfulness"], 0.0)
         self.assertEqual(report.metrics["cost_per_query"], 0.0)
 
-    def test_large_volume_aggregation(self) -> None:
+    async def test_large_volume_aggregation(self) -> None:
         """
         Simulate 1000 data points to ensure aggregation logic holds up.
         """
@@ -225,7 +231,7 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         # 1000 items with value 1.0. Average should be 1.0.
         members = [f"{now}:1.0:id{i}".encode() for i in range(1000)]
 
-        def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
+        async def zrange_side_effect(key: str, *args: float | str, **kwargs: float | str) -> list[bytes]:
             if "latency" in key:
                 return members
             return []
@@ -233,14 +239,14 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         self.mock_redis.zrangebyscore.side_effect = zrange_side_effect
 
         start_time = time.time()
-        report = self.breaker.get_health_report()
+        report = await self.breaker.get_health_report()
         end_time = time.time()
 
         self.assertAlmostEqual(report.metrics["avg_latency"], 1.0)
         # Ensure it's reasonably fast (mock overhead exists, but logic is O(N))
         self.assertLess(end_time - start_time, 1.0)
 
-    def test_boundary_window_inclusion(self) -> None:
+    async def test_boundary_window_inclusion(self) -> None:
         """
         Verify events at exactly `now - 3600` are included (inclusive behavior),
         and `now` are included.
@@ -249,12 +255,8 @@ class TestCircuitBreakerHealthReportEdgeCases(unittest.TestCase):
         self.mock_redis.get.return_value = b"CLOSED"
         now = 10000.0  # Fixed time
 
-        # We need to control what zrangebyscore receives to verify logic.
-        # But we are mocking zrangebyscore, so we can't test if zrangebyscore *itself* is inclusive.
-        # We can only test that we PASS the correct boundaries to zrangebyscore.
-
         with unittest.mock.patch("time.time", return_value=now):
-            self.breaker.get_health_report()
+            await self.breaker.get_health_report()
 
             # Check the call arguments for latency
             # We assume the implementation uses `now - window`
