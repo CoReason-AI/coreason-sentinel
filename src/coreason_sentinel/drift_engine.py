@@ -217,9 +217,7 @@ class DriftEngine:
         return cast(List[float], probabilities.tolist())
 
     @classmethod
-    def detect_drift(
-        cls, content: str, user_context: Optional[UserContext] = None, **kwargs: Any
-    ) -> float:
+    def detect_drift(cls, content: str, user_context: Optional[UserContext] = None, **kwargs: Any) -> float:
         """
         High-level interface for detecting drift with user context awareness.
 

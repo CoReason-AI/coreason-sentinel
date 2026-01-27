@@ -19,8 +19,8 @@ from enum import Enum
 from typing import Optional
 
 import numpy as np
-from redis.asyncio import Redis
 from coreason_identity.models import UserContext
+from redis.asyncio import Redis
 
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
