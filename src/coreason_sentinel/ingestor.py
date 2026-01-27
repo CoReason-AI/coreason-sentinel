@@ -128,6 +128,9 @@ class TelemetryIngestorAsync:
         for metric_name, value in custom_metrics.items():
             await self.circuit_breaker.record_metric(metric_name, value)
 
+        if custom_metrics:
+            logger.info(f"Extracted {len(custom_metrics)} custom metrics from span {span.span_id}")
+
         # 5. Check Triggers
         await self.circuit_breaker.check_triggers()
 
@@ -169,6 +172,9 @@ class TelemetryIngestorAsync:
         custom_metrics = self._extract_custom_metrics(event.input_text, event.metadata)
         for metric_name, value in custom_metrics.items():
             await self.circuit_breaker.record_metric(metric_name, value)
+
+        if custom_metrics:
+            logger.info(f"Extracted {len(custom_metrics)} custom metrics from event {event.event_id}")
 
         combined_metadata = event.metadata.copy()
         combined_metadata.update(custom_metrics)
