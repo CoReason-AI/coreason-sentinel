@@ -3,3 +3,5 @@ theme:
   name: material
 nav:
   - Home: index.md
+  - Usage: usage.md
+  - Requirements: requirements.md
