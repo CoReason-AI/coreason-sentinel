@@ -8,9 +8,10 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_sentinel
 
-from typing import List, Union, cast
+from typing import Any, List, Optional, Union, cast
 
 import numpy as np
+from coreason_identity.models import UserContext
 from numpy.typing import NDArray
 from scipy.spatial.distance import cosine
 from scipy.special import rel_entr
@@ -214,3 +215,28 @@ class DriftEngine:
 
         probabilities = counts / total
         return cast(List[float], probabilities.tolist())
+
+    @classmethod
+    def detect_drift(cls, content: str, user_context: Optional[UserContext] = None, **kwargs: Any) -> float:
+        """
+        High-level interface for detecting drift with user context awareness.
+
+        This method is a placeholder for the orchestration logic currently handled
+        by TelemetryIngestor.process_drift, which uses:
+        1. BaselineProvider to fetch cohort-specific baselines (via user_context.groups).
+        2. DriftEngine.detect_vector_drift for the mathematical computation.
+
+        Args:
+            content: The raw input content.
+            user_context: The user context for cohort selection.
+            **kwargs: Additional arguments (e.g., embeddings, baselines).
+
+        Returns:
+            float: The drift score.
+
+        Raises:
+            NotImplementedError: As the logic is currently in Ingestor.
+        """
+        raise NotImplementedError(
+            "Drift detection orchestration is currently handled in TelemetryIngestor.process_drift"
+        )
