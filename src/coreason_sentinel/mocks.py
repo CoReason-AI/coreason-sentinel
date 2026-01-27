@@ -16,6 +16,8 @@ from coreason_sentinel.interfaces import (
     VeritasClientProtocol,
     PhoenixClientProtocol,
     VeritasEvent,
+    AssayGraderProtocol,
+    GradeResult,
 )
 from coreason_sentinel.utils.logger import logger
 
@@ -67,3 +69,19 @@ class MockPhoenixClient(PhoenixClientProtocol):
 
     def update_span_attributes(self, trace_id: str, span_id: str, attributes: Dict[str, Any]) -> None:
         logger.info(f"MockPhoenixClient: Updating span {span_id} (Trace {trace_id}) with attributes: {attributes}")
+
+
+class MockGrader(AssayGraderProtocol):
+    """
+    Mock implementation of AssayGraderProtocol.
+    Returns dummy GradeResult.
+    """
+
+    def grade_conversation(self, conversation: Dict[str, Any]) -> GradeResult:
+        logger.info("MockGrader: Grading conversation")
+        return GradeResult(
+            faithfulness_score=1.0,
+            retrieval_precision_score=1.0,
+            safety_score=1.0,
+            details={},
+        )

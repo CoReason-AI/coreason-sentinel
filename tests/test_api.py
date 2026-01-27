@@ -31,7 +31,10 @@ def test_health_check() -> None:
 
 @pytest.mark.asyncio
 async def test_get_telemetry_ingestor_default() -> None:
-    """Test that the default dependency raises RuntimeError if state not set (or NotImplementedError if not using state)."""
+    """
+    Test that the default dependency raises RuntimeError if state not set
+    (or NotImplementedError if not using state).
+    """
     # In main.py we changed it to check app.state.
     # But locally running this test, app.state might not be populated if lifespan didn't run.
     # TestClient runs lifespan if using `with TestClient(app) as client:`.

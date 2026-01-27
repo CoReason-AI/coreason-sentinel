@@ -20,6 +20,7 @@ from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import OTELSpan, VeritasEvent
 from coreason_sentinel.mocks import (
     MockBaselineProvider,
+    MockGrader,
     MockNotificationService,
     MockPhoenixClient,
     MockVeritasClient,
@@ -54,7 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     veritas_client = MockVeritasClient()
 
     # 4. Initialize Core Components
-    spot_checker = SpotChecker(phoenix_client=phoenix_client)
+    grader = MockGrader()
+    spot_checker = SpotChecker(config=config, grader=grader, phoenix_client=phoenix_client)
+
     circuit_breaker = CircuitBreaker(
         redis_client=redis_client,
         config=config,
@@ -83,7 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     logger.info("Shutting down Sentinel resources...")
     await ingestor.__aexit__(None, None, None)
-    await redis_client.aclose()
+    await redis_client.close()
 
 
 app = FastAPI(title="CoReason Sentinel", version="0.1.0", lifespan=lifespan)
@@ -96,7 +99,8 @@ async def get_telemetry_ingestor() -> TelemetryIngestorAsync:
     if not hasattr(app.state, "ingestor"):
         # Fallback for tests if lifespan didn't run or state not set
         raise RuntimeError("TelemetryIngestor not initialized in app.state")
-    return app.state.ingestor
+    from typing import cast
+    return cast(TelemetryIngestorAsync, app.state.ingestor)
 
 
 @app.get("/health")  # type: ignore[misc]
