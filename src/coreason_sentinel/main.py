@@ -100,6 +100,7 @@ async def get_telemetry_ingestor() -> TelemetryIngestorAsync:
         # Fallback for tests if lifespan didn't run or state not set
         raise RuntimeError("TelemetryIngestor not initialized in app.state")
     from typing import cast
+
     return cast(TelemetryIngestorAsync, app.state.ingestor)
 
 

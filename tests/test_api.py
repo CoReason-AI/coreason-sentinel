@@ -203,17 +203,13 @@ def test_agent_health_check_success() -> None:
     # We don't use spec=TelemetryIngestorAsync because it doesn't see instance attributes set in __init__
     mock_ingestor = MagicMock()
     mock_ingestor.config = SentinelConfig(
-        agent_id="agent-001",
-        owner_email="ops@coreason.ai",
-        phoenix_endpoint="http://localhost:6006"
+        agent_id="agent-001", owner_email="ops@coreason.ai", phoenix_endpoint="http://localhost:6006"
     )
     # Mock the circuit breaker attribute
     mock_cb = MagicMock()
-    mock_cb.get_health_report = AsyncMock(return_value=HealthReport(
-        timestamp=datetime.now(),
-        breaker_state="CLOSED",
-        metrics={"avg_latency": 0.5}
-    ))
+    mock_cb.get_health_report = AsyncMock(
+        return_value=HealthReport(timestamp=datetime.now(), breaker_state="CLOSED", metrics={"avg_latency": 0.5})
+    )
     mock_ingestor.circuit_breaker = mock_cb
 
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -232,9 +228,7 @@ def test_agent_health_check_not_found() -> None:
     """Test health check for invalid agent ID."""
     mock_ingestor = MagicMock()
     mock_ingestor.config = SentinelConfig(
-        agent_id="agent-001",
-        owner_email="ops@coreason.ai",
-        phoenix_endpoint="http://localhost:6006"
+        agent_id="agent-001", owner_email="ops@coreason.ai", phoenix_endpoint="http://localhost:6006"
     )
 
     app.dependency_overrides[get_telemetry_ingestor] = lambda: mock_ingestor
@@ -250,9 +244,7 @@ def test_agent_status_check() -> None:
     """Test status check."""
     mock_ingestor = MagicMock()
     mock_ingestor.config = SentinelConfig(
-        agent_id="agent-001",
-        owner_email="ops@coreason.ai",
-        phoenix_endpoint="http://localhost:6006"
+        agent_id="agent-001", owner_email="ops@coreason.ai", phoenix_endpoint="http://localhost:6006"
     )
     mock_cb = MagicMock()
     mock_cb.allow_request = AsyncMock(return_value=True)
@@ -284,7 +276,7 @@ def test_ingest_veritas_event_success() -> None:
             "input_text": "Hello",
             "output_text": "World",
             "metrics": {"latency": 0.1},
-            "metadata": {}
+            "metadata": {},
         }
 
         response = client.post("/ingest/veritas", json=event_data)
