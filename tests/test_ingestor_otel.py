@@ -57,7 +57,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
         await self.ingestor.process_otel_span(span)
 
         # Check latency metric
-        self.circuit_breaker.record_metric.assert_any_call("latency", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("latency", 1.0, None)
         self.circuit_breaker.check_triggers.assert_called_once()
 
     async def test_process_span_token_and_cost_extraction(self) -> None:
@@ -75,8 +75,8 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
 
         await self.ingestor.process_otel_span(span)
 
-        self.circuit_breaker.record_metric.assert_any_call("token_count", 2000.0)
-        self.circuit_breaker.record_metric.assert_any_call("cost", 0.02)
+        self.circuit_breaker.record_metric.assert_any_call("token_count", 2000.0, None)
+        self.circuit_breaker.record_metric.assert_any_call("cost", 0.02, None)
 
     async def test_process_span_alternative_token_attributes(self) -> None:
         # Check priority: llm.token_count.total > gen_ai.usage.total_tokens
@@ -92,7 +92,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.ingestor.process_otel_span(span)
-        self.circuit_breaker.record_metric.assert_any_call("token_count", 500.0)
+        self.circuit_breaker.record_metric.assert_any_call("token_count", 500.0, None)
 
     async def test_process_span_no_metrics(self) -> None:
         # Zero duration, no attributes
@@ -193,7 +193,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
             attributes={"llm.token_count.total": 1000},
         )
         await ingestor.process_otel_span(span_normal)
-        circuit_breaker.record_metric.assert_any_call("cost", 0.02)
+        circuit_breaker.record_metric.assert_any_call("cost", 0.02, None)
         circuit_breaker.check_triggers.assert_called()
 
         circuit_breaker.reset_mock()
@@ -208,7 +208,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
             attributes={"llm.token_count.total": 3000},
         )
         await ingestor.process_otel_span(span_expensive)
-        circuit_breaker.record_metric.assert_any_call("cost", 0.06)
+        circuit_breaker.record_metric.assert_any_call("cost", 0.06, None)
         circuit_breaker.check_triggers.assert_called()
 
     async def test_process_span_third_token_attribute_variant(self) -> None:
@@ -225,7 +225,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.ingestor.process_otel_span(span)
-        self.circuit_breaker.record_metric.assert_any_call("token_count", 123.0)
+        self.circuit_breaker.record_metric.assert_any_call("token_count", 123.0, None)
 
     async def test_process_span_sentiment_extraction(self) -> None:
         """Test extraction of sentiment metrics from gen_ai.prompt."""
@@ -244,7 +244,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
 
         # "STOP" and "WRONG" are default regex patterns
         # Only one metric per event is recorded for sentiment frustration
-        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0, None)
 
     async def test_process_span_sentiment_extraction_fallback(self) -> None:
         """Test extraction of sentiment metrics from llm.input_messages fallback."""
@@ -260,7 +260,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.ingestor.process_otel_span(span)
-        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0, None)
 
     async def test_process_span_refusal_extraction(self) -> None:
         """Test extraction of refusal metrics from is_refusal attribute."""
@@ -276,7 +276,7 @@ class TestOTELSpanIngestion(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.ingestor.process_otel_span(span)
-        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0, None)
 
     async def test_process_span_refusal_false(self) -> None:
         """Test extraction of refusal metrics when is_refusal is False."""

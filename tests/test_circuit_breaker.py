@@ -85,8 +85,10 @@ class TestCircuitBreakerState(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.getset.return_value = b"CLOSED"
         reason = "Manual Trip"
         await self.breaker.set_state(CircuitBreakerState.OPEN, reason=reason)
+        # Reason now includes (Global) if no user_context
+        expected_reason = f"{reason} (Global)"
         self.mock_notification_service.send_critical_alert.assert_called_once_with(
-            email="test@example.com", agent_id="test-agent", reason=reason
+            email="test@example.com", agent_id="test-agent", reason=expected_reason
         )
 
     async def test_idempotent_open_alert(self) -> None:
