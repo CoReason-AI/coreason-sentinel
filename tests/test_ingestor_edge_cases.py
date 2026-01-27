@@ -93,7 +93,7 @@ class TestIngestorEdgeCases(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(count, 0)
 
         # Verify metrics from process_event WERE recorded (since it ran before the crash)
-        self.mock_cb.record_metric.assert_any_call("latency", 0.1)
+        self.mock_cb.record_metric.assert_any_call("latency", 0.1, None)
 
     async def test_ingest_drift_lag_simulation(self) -> None:
         """

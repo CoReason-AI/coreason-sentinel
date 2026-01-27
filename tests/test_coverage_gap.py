@@ -80,7 +80,7 @@ class TestCoverageGap(unittest.IsolatedAsyncioTestCase):
 
         await self.ingestor.process_event(self.event)
 
-        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.mock_cb.record_metric.assert_any_call("sentiment_frustration_count", 1.0, None)
 
     async def test_process_drift_vector_exception(self) -> None:
         """Cover 221-222: Exception in vector drift."""

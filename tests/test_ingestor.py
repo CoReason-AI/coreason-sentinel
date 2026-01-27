@@ -138,7 +138,7 @@ class TestTelemetryIngestorAsync(unittest.IsolatedAsyncioTestCase):
             count = await ingestor.ingest_from_veritas_since(datetime.now(timezone.utc))
 
         assert count == 1
-        mock_cb.record_metric.assert_any_call("latency", 0.1)
+        mock_cb.record_metric.assert_any_call("latency", 0.1, None)
 
         calls = [call.args[0] for call in mock_cb.record_metric.call_args_list]
         assert "relevance_drift" in calls
@@ -176,8 +176,8 @@ class TestTelemetryIngestorAsync(unittest.IsolatedAsyncioTestCase):
 
         await ingestor.process_event(event)
 
-        mock_cb.record_metric.assert_any_call("latency", 100.0)
-        mock_cb.record_metric.assert_any_call("token_count", 50.0)
+        mock_cb.record_metric.assert_any_call("latency", 100.0, None)
+        mock_cb.record_metric.assert_any_call("token_count", 50.0, None)
         mock_cb.check_triggers.assert_called_once()
 
     async def test_process_drift_vector(self) -> None:
@@ -215,7 +215,7 @@ class TestTelemetryIngestorAsync(unittest.IsolatedAsyncioTestCase):
             with patch("anyio.to_thread.run_sync", side_effect=lambda func, *args: func(*args)):
                 await ingestor.process_drift(event)
                 mock_detect_drift.assert_called()
-                mock_cb.record_metric.assert_any_call("vector_drift", 0.5)
+                mock_cb.record_metric.assert_any_call("vector_drift", 0.5, None)
 
 
 class TestTelemetryIngestorSync:

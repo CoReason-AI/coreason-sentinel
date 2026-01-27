@@ -131,24 +131,28 @@ class BaselineProviderProtocol(Protocol):
     Interface for retrieving Baseline Signatures.
     """
 
-    def get_baseline_vectors(self, agent_id: str) -> List[List[float]]:
+    def get_baseline_vectors(self, agent_id: str, groups: Optional[List[str]] = None) -> List[List[float]]:
         """
         Retrieves the list of baseline vectors (embeddings) for the agent.
 
         Args:
             agent_id: The agent ID.
+            groups: Optional list of groups/roles to select specific baselines (e.g., 'Doctors').
 
         Returns:
             List[List[float]]: A list of embedding vectors.
         """
         ...
 
-    def get_baseline_output_length_distribution(self, agent_id: str) -> Tuple[List[float], List[float]]:
+    def get_baseline_output_length_distribution(
+        self, agent_id: str, groups: Optional[List[str]] = None
+    ) -> Tuple[List[float], List[float]]:
         """
         Retrieves the baseline output length distribution.
 
         Args:
             agent_id: The agent ID.
+            groups: Optional list of groups/roles to select specific baselines.
 
         Returns:
             Tuple[List[float], List[float]]: A tuple containing:
