@@ -60,7 +60,7 @@ class TestOTELSpanIngestionEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         # str(["...", "STOP..."]) -> "['...', 'STOP...']"
         # Regex "STOP" should match.
-        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0, None)
 
     async def test_attribute_precedence_masking(self) -> None:
         """
@@ -102,7 +102,7 @@ class TestOTELSpanIngestionEdgeCases(unittest.IsolatedAsyncioTestCase):
         )
 
         await self.ingestor.process_otel_span(span)
-        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0, None)
 
     async def test_refusal_truthiness_string_false(self) -> None:
         """
@@ -127,7 +127,7 @@ class TestOTELSpanIngestionEdgeCases(unittest.IsolatedAsyncioTestCase):
         await self.ingestor.process_otel_span(span)
 
         # It SHOULD record refusal count because "False" is True in boolean context
-        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("refusal_count", 1.0, None)
 
     async def test_large_input_text(self) -> None:
         """Test processing with a large text payload to ensure no crashes."""
@@ -147,7 +147,7 @@ class TestOTELSpanIngestionEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         await self.ingestor.process_otel_span(span)
 
-        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0)
+        self.circuit_breaker.record_metric.assert_any_call("sentiment_frustration_count", 1.0, None)
 
     async def test_missing_prompt_attributes(self) -> None:
         """Test span with NO prompt attributes handled gracefully."""

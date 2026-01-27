@@ -66,7 +66,7 @@ class TestIngestorRelevanceDrift:
 
         # We need to wait for completion? Portal.call blocks. So it is done.
 
-        breaker.record_metric.assert_any_call("relevance_drift", 1.0)
+        breaker.record_metric.assert_any_call("relevance_drift", 1.0, None)
 
     def test_process_event_skips_missing_embeddings(self, mock_components: tuple[TelemetryIngestor, MagicMock]) -> None:
         ingestor, breaker = mock_components
