@@ -97,7 +97,7 @@ class TestCircuitBreakerUserContext(unittest.IsolatedAsyncioTestCase):
         # We need to make sure when it's called with USER key, it returns violation.
 
         # Refine mock to return violation only for user key
-        def side_effect(key, min_score, max_score):
+        def side_effect(key: str, min_score: float, max_score: float) -> list[bytes]:
             if "user123" in key and "cost" in key:
                 return [b"1234567890:15.0:uuid"]
             return []
@@ -123,14 +123,14 @@ class TestCircuitBreakerUserContext(unittest.IsolatedAsyncioTestCase):
         # Setup: State is HALF_OPEN
         user_state_key = "sentinel:breaker:test-agent:user123:state"
 
-        async def get_mock(key):
+        async def get_mock(key: str) -> bytes | None:
             if key == user_state_key:
-                return CircuitBreakerState.HALF_OPEN.value.encode('utf-8')
+                return b"HALF_OPEN"
             return None
 
         self.mock_redis.get.side_effect = get_mock
 
-        # No triggers violated (redis returns empty list by default if not mocked otherwise, or we leave side_effect empty)
+        # No triggers violated (returns empty list by default if not mocked otherwise)
         # Ensure zrangebyscore returns empty list
         self.mock_redis.zrangebyscore.return_value = []
 
