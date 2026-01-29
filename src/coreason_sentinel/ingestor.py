@@ -92,12 +92,15 @@ class TelemetryIngestorAsync:
 
         # Map user context to span attributes if available
         if user_context:
-            if user_context.sub:
-                span.attributes["enduser.id"] = user_context.sub
-            if user_context.permissions:
+            user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+            if user_id:
+                span.attributes["enduser.id"] = user_id
+
+            groups = getattr(user_context, "groups", getattr(user_context, "permissions", None))
+            if groups:
                 # Map permissions/groups to role. Taking the first one or joining them.
-                # Requirement: Map user_context.groups to enduser.role
-                span.attributes["enduser.role"] = ",".join(user_context.permissions)
+                # Requirement: Map user_context.groups/permissions to enduser.role
+                span.attributes["enduser.role"] = ",".join(groups)
 
         # 1. Calculate Latency (seconds)
         if span.end_time_unix_nano > span.start_time_unix_nano:
@@ -144,7 +147,9 @@ class TelemetryIngestorAsync:
         # We assume if specific metrics are present.
         # For now, let's assume 'security_violation' key in custom metrics or attributes.
         if "security_violation" in custom_metrics or attributes.get("security_violation"):
-            user_id = user_context.sub if user_context else "unknown"
+            user_id = "unknown"
+            if user_context:
+                user_id = getattr(user_context, "user_id", getattr(user_context, "sub", "unknown"))
             logger.critical(f"SECURITY VIOLATION detected for User ID: {user_id}")
 
         # 5. Check Triggers
@@ -170,7 +175,6 @@ class TelemetryIngestorAsync:
                 # Assuming batch ingestion might not have user context or it's embedded in event metadata?
                 # For now, we pass None.
                 await self.process_event(event)
-                await self.process_drift(event)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to process event {event.event_id}: {e}")
@@ -210,7 +214,9 @@ class TelemetryIngestorAsync:
                 )
                 await self.circuit_breaker.record_metric("safety_score", grade.safety_score, user_context)
 
-        await self.circuit_breaker.check_triggers(user_context)
+        # 6. Drift Detection
+        # Note: process_drift records metrics and calls check_triggers internally.
+        await self.process_drift(event, user_context)
 
     async def process_drift(self, event: VeritasEvent, user_context: Optional[UserContext] = None) -> None:
         """
@@ -218,7 +224,9 @@ class TelemetryIngestorAsync:
         """
         logger.info(f"Processing drift for event {event.event_id}")
 
-        groups = user_context.permissions if user_context else None
+        groups = None
+        if user_context:
+            groups = getattr(user_context, "groups", getattr(user_context, "permissions", None))
 
         # 1. Drift Detection (Vector)
         embedding = event.metadata.get("embedding")
@@ -297,7 +305,9 @@ class TelemetryIngestorAsync:
 
         await self.circuit_breaker.record_metric("output_length", output_length, user_context)
 
-        groups = user_context.permissions if user_context else None
+        groups = None
+        if user_context:
+            groups = getattr(user_context, "groups", getattr(user_context, "permissions", None))
         try:
             # DB call
             baseline_dist, bin_edges = await anyio.to_thread.run_sync(

@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.interfaces import NotificationServiceProtocol
-from coreason_sentinel.models import SentinelConfig
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ class TestCircuitBreakerUserContext(unittest.IsolatedAsyncioTestCase):
             recovery_timeout=60,
         )
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
-        self.user_context = UserContext(sub="user123", email="u@e.com")
+        self.user_context = UserContext(user_id="user123", sub="user123", email="u@e.com")
 
     async def test_get_state_user(self) -> None:
         """Test getting state for specific user."""
@@ -62,7 +62,91 @@ class TestCircuitBreakerUserContext(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_triggers_user(self) -> None:
         """Test checking triggers for user."""
+        # Add a trigger to ensure _evaluate_trigger is called
+        self.config.triggers.append(CircuitBreakerTrigger(metric="cost", threshold=10.0, window_seconds=60))
         await self.breaker.check_triggers(self.user_context)
+        # Verify redis zrangebyscore called with user key
+        args = self.mock_redis.zrangebyscore.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:user123:cost"
+
+    async def test_trigger_violation_user(self) -> None:
+        """Test that a trigger violation for a user trips the breaker."""
+        # Setup trigger: Cost > 10
+        self.config.triggers.append(CircuitBreakerTrigger(metric="cost", threshold=10.0, window_seconds=60))
+
+        # Mock Redis returning values that violate the trigger
+        # zrangebyscore returns list of members: "timestamp:value:uuid"
+        # We need sum > 10. Let's return one event with value 15.0
+        member = b"1234567890:15.0:uuid"
+        self.mock_redis.zrangebyscore.return_value = [member]
+
+        # Call check_triggers
+        await self.breaker.check_triggers(self.user_context)
+
+        # Verify transition to OPEN
+        # set_state is called. We can check the mock or verify behavior if we mocked the internal methods?
+        # Since we are mocking redis, the actual state set involves redis.getset
+        # But we want to ensure line 313 is hit.
+
+        # Verify set_state was called with OPEN
+        # The first call to set_state might be for global, second for user if global passed?
+        # Actually check_triggers calls global then user.
+        # If global doesn't trip, user logic runs.
+        # We mocked redis to return the violation for the USER key or GLOBAL key?
+        # zrangebyscore is called with specific key.
+        # We need to make sure when it's called with USER key, it returns violation.
+
+        # Refine mock to return violation only for user key
+        def side_effect(key: str, min_score: float, max_score: float) -> list[bytes]:
+            if "user123" in key and "cost" in key:
+                return [b"1234567890:15.0:uuid"]
+            return []
+
+        self.mock_redis.zrangebyscore.side_effect = side_effect
+
+        await self.breaker.check_triggers(self.user_context)
+
+        # Verify set_state called for user
+        # We can verify log or redis calls.
+        # set_state calls redis.getset(state_key, ...)
+        # Check if getset called with user state key and OPEN
+        user_state_key = "sentinel:breaker:test-agent:user123:state"
+
+        # Check that getset was called with this key and OPEN
+        calls = self.mock_redis.getset.call_args_list
+        # Filter for our key
+        matching_calls = [c for c in calls if c[0][0] == user_state_key and c[0][1] == CircuitBreakerState.OPEN.value]
+        assert len(matching_calls) > 0
+
+    async def test_recovery_user(self) -> None:
+        """Test that a user recovers from HALF_OPEN to CLOSED if no violation."""
+        # Setup: State is HALF_OPEN
+        user_state_key = "sentinel:breaker:test-agent:user123:state"
+
+        async def get_mock(key: str) -> bytes | None:
+            if key == user_state_key:
+                return b"HALF_OPEN"
+            return None
+
+        self.mock_redis.get.side_effect = get_mock
+
+        # No triggers violated (returns empty list by default if not mocked otherwise)
+        # Ensure zrangebyscore returns empty list
+        self.mock_redis.zrangebyscore.return_value = []
+
+        await self.breaker.check_triggers(self.user_context)
+
+        # Verify transition to CLOSED
+        calls = self.mock_redis.getset.call_args_list
+        matching_calls = [c for c in calls if c[0][0] == user_state_key and c[0][1] == CircuitBreakerState.CLOSED.value]
+        assert len(matching_calls) > 0
+
+    async def test_get_recent_values_user(self) -> None:
+        """Test getting recent values for user."""
+        await self.breaker.get_recent_values("latency", 10, self.user_context)
+        self.mock_redis.zrevrange.assert_called()
+        args = self.mock_redis.zrevrange.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:user123:latency"
         # Should check global (implicit in implementation if called with None first?)
         # Implementation: calls _check_triggers_internal(None) then (user_context)
 
