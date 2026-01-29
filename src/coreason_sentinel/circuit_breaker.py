@@ -81,8 +81,11 @@ class CircuitBreaker:
         self._cooldown_key = f"sentinel:breaker:{self.agent_id}:cooldown"
 
     def _get_keys(self, user_context: Optional[UserContext]) -> tuple[str, str]:
-        if user_context and user_context.sub:
-            user_id = user_context.sub
+        user_id = None
+        if user_context:
+            user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+
+        if user_id:
             return (
                 f"sentinel:breaker:{self.agent_id}:{user_id}:state",
                 f"sentinel:breaker:{self.agent_id}:{user_id}:cooldown",
@@ -164,7 +167,11 @@ class CircuitBreaker:
                 # Send Critical Alert
                 if self.config.owner_email:
                     alert_reason = reason or "Circuit Breaker Tripped (Manual or Unknown)"
-                    user_info = f" (User: {user_context.sub})" if user_context and user_context.sub else " (Global)"
+                    user_id = None
+                    if user_context:
+                        user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+
+                    user_info = f" (User: {user_id})" if user_id else " (Global)"
                     try:
                         self.notification_service.send_critical_alert(
                             email=self.config.owner_email,
@@ -239,8 +246,12 @@ class CircuitBreaker:
     async def _record_metric_internal(
         self, metric_name: str, value: float, user_context: Optional[UserContext]
     ) -> None:
-        if user_context and user_context.sub:
-            key = f"sentinel:metrics:{self.agent_id}:{user_context.sub}:{metric_name}"
+        user_id = None
+        if user_context:
+            user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+
+        if user_id:
+            key = f"sentinel:metrics:{self.agent_id}:{user_id}:{metric_name}"
         else:
             key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
 
@@ -297,7 +308,10 @@ class CircuitBreaker:
                     f"Trigger violated: {trigger.metric} {trigger.operator} {trigger.threshold} "
                     f"in last {trigger.window_seconds}s"
                 )
-                prefix = f"User {user_context.sub}: " if user_context and user_context.sub else "Global: "
+                user_id = None
+                if user_context:
+                    user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+                prefix = f"User {user_id}: " if user_id else "Global: "
                 logger.warning(f"{prefix}{reason}. Tripping Circuit Breaker.")
                 await self.set_state(CircuitBreakerState.OPEN, reason=reason, user_context=user_context)
                 violation = True
@@ -307,7 +321,10 @@ class CircuitBreaker:
         if state == CircuitBreakerState.HALF_OPEN and not violation:
             # If we are here, it means no triggers were violated.
             # We assume the trickle traffic was successful.
-            prefix = f"User {user_context.sub}" if user_context and user_context.sub else "Global"
+            user_id = None
+            if user_context:
+                user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+            prefix = f"User {user_id}" if user_id else "Global"
             logger.info(f"Circuit Breaker for {self.agent_id} ({prefix}) recovering to CLOSED.")
             await self.set_state(CircuitBreakerState.CLOSED, user_context=user_context)
 
@@ -325,8 +342,12 @@ class CircuitBreaker:
         Returns:
             bool: True if the trigger is violated, False otherwise.
         """
-        if user_context and user_context.sub:
-            key = f"sentinel:metrics:{self.agent_id}:{user_context.sub}:{trigger.metric}"
+        user_id = None
+        if user_context:
+            user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+
+        if user_id:
+            key = f"sentinel:metrics:{self.agent_id}:{user_id}:{trigger.metric}"
         else:
             key = f"sentinel:metrics:{self.agent_id}:{trigger.metric}"
 
@@ -392,8 +413,12 @@ class CircuitBreaker:
         Returns:
             list[float]: A list of float values, ordered from newest to oldest.
         """
-        if user_context and user_context.sub:
-            key = f"sentinel:metrics:{self.agent_id}:{user_context.sub}:{metric_name}"
+        user_id = None
+        if user_context:
+            user_id = getattr(user_context, "user_id", getattr(user_context, "sub", None))
+
+        if user_id:
+            key = f"sentinel:metrics:{self.agent_id}:{user_id}:{metric_name}"
         else:
             key = f"sentinel:metrics:{self.agent_id}:{metric_name}"
 
