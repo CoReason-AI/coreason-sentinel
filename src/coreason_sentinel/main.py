@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await redis_client.close()
 
 
-app = FastAPI(title="CoReason Sentinel", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="CoReason Sentinel", version="0.3.0", lifespan=lifespan)
 
 
 async def get_telemetry_ingestor() -> TelemetryIngestorAsync:

@@ -11,6 +11,7 @@
 import time
 import uuid
 from datetime import datetime
+from typing import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -199,32 +200,33 @@ def test_complex_batch_ingestion() -> None:
 
 # --- New Tests for Full Integration with Lifespan ---
 
+
 @pytest.fixture
-def mock_redis():
+def mock_redis() -> Generator[MagicMock, None, None]:
     with patch("coreason_sentinel.main.Redis") as mock:
         mock_instance = MagicMock()
         mock.from_url.return_value = mock_instance
         mock_instance.close = AsyncMock()
         yield mock_instance
 
+
 @pytest.fixture
-def client_with_lifespan(mock_redis):
+def client_with_lifespan(mock_redis: MagicMock) -> Generator[TestClient, None, None]:
     # Using 'with' triggers lifespan
     with TestClient(app) as c:
         yield c
 
-def test_get_agent_health(client_with_lifespan):
+
+def test_get_agent_health(client_with_lifespan: TestClient) -> None:
     # Access the ingestor created in lifespan
     ingestor = app.state.ingestor
 
     # Mock return value of circuit breaker
     # Note: ingestor.circuit_breaker is a real object with a mock redis.
     # We can just mock the method directly on the object.
-    ingestor.circuit_breaker.get_health_report = AsyncMock(return_value=HealthReport(
-        timestamp=datetime(2025, 1, 1),
-        breaker_state="CLOSED",
-        metrics={"avg_latency": 0.5}
-    ))
+    ingestor.circuit_breaker.get_health_report = AsyncMock(
+        return_value=HealthReport(timestamp=datetime(2025, 1, 1), breaker_state="CLOSED", metrics={"avg_latency": 0.5})
+    )
 
     response = client_with_lifespan.get("/health/default_agent")
     assert response.status_code == 200
@@ -232,7 +234,8 @@ def test_get_agent_health(client_with_lifespan):
     assert data["breaker_state"] == "CLOSED"
     assert data["metrics"]["avg_latency"] == 0.5
 
-def test_get_agent_status(client_with_lifespan):
+
+def test_get_agent_status(client_with_lifespan: TestClient) -> None:
     ingestor = app.state.ingestor
     ingestor.circuit_breaker.allow_request = AsyncMock(return_value=True)
 
@@ -244,7 +247,8 @@ def test_get_agent_status(client_with_lifespan):
     response = client_with_lifespan.get("/status/default_agent")
     assert response.json() is False
 
-def test_ingest_veritas(client_with_lifespan):
+
+def test_ingest_veritas(client_with_lifespan: TestClient) -> None:
     ingestor = app.state.ingestor
     ingestor.process_event = AsyncMock()
 
@@ -256,7 +260,7 @@ def test_ingest_veritas(client_with_lifespan):
         "input_text": "Hello",
         "output_text": "World",
         "metrics": {"latency": 0.1},
-        "metadata": {}
+        "metadata": {},
     }
 
     response = client_with_lifespan.post("/ingest/veritas", json=event_data)
