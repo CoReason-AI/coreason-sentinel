@@ -6,7 +6,7 @@ from redis.asyncio import Redis
 
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.interfaces import NotificationServiceProtocol
-from coreason_sentinel.models import SentinelConfig
+from coreason_sentinel.models import CircuitBreakerTrigger, SentinelConfig
 
 
 @pytest.mark.asyncio
@@ -79,3 +79,32 @@ class TestCircuitBreakerNoneContext(unittest.IsolatedAsyncioTestCase):
         del mock_ctx.sub
         await self.breaker.set_state(CircuitBreakerState.OPEN, reason="test", user_context=mock_ctx)
         self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
+
+    async def test_check_triggers_empty_context(self) -> None:
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        # Setup a trigger
+        self.config.triggers.append(CircuitBreakerTrigger(metric="latency", threshold=1.0, window_seconds=60))
+        # Call
+        await self.breaker.check_triggers(mock_ctx)
+        # Should check global key
+        self.mock_redis.zrangebyscore.assert_called()
+        # Verify key used in zrangebyscore
+        args = self.mock_redis.zrangebyscore.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:latency"
+
+    async def test_get_recent_values_empty_context(self) -> None:
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        await self.breaker.get_recent_values("latency", 10, mock_ctx)
+        self.mock_redis.zrevrange.assert_called()
+        args = self.mock_redis.zrevrange.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:latency"
+
+    async def test_get_recent_values_none(self) -> None:
+        await self.breaker.get_recent_values("latency", 10, None)
+        self.mock_redis.zrevrange.assert_called()
+        args = self.mock_redis.zrevrange.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:latency"
