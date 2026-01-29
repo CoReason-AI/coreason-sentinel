@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from coreason_identity.models import UserContext
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import (
@@ -12,6 +11,7 @@ from coreason_sentinel.interfaces import (
 )
 from coreason_sentinel.models import SentinelConfig
 from coreason_sentinel.spot_checker import SpotChecker
+
 
 class TestIngestorUserContextEdgeCases(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -35,9 +35,7 @@ class TestIngestorUserContextEdgeCases(unittest.IsolatedAsyncioTestCase):
 
     async def test_process_otel_span_none_context(self) -> None:
         span = OTELSpan(
-            trace_id="t1", span_id="s1", name="test",
-            start_time_unix_nano=100, end_time_unix_nano=200,
-            attributes={}
+            trace_id="t1", span_id="s1", name="test", start_time_unix_nano=100, end_time_unix_nano=200, attributes={}
         )
         await self.ingestor.process_otel_span(span, None)
         assert "enduser.id" not in span.attributes
@@ -60,22 +58,25 @@ class TestIngestorUserContextEdgeCases(unittest.IsolatedAsyncioTestCase):
         del mock_context.permissions
 
         span = OTELSpan(
-            trace_id="t1", span_id="s1", name="test",
-            start_time_unix_nano=100, end_time_unix_nano=200,
-            attributes={}
+            trace_id="t1", span_id="s1", name="test", start_time_unix_nano=100, end_time_unix_nano=200, attributes={}
         )
 
         # We need to type ignore or cast because process_otel_span expects UserContext
-        await self.ingestor.process_otel_span(span, mock_context) # type: ignore
+        await self.ingestor.process_otel_span(span, mock_context)
 
         assert "enduser.id" not in span.attributes
         assert "enduser.role" not in span.attributes
 
     async def test_process_event_none_context(self) -> None:
         event = VeritasEvent(
-            event_id="e1", timestamp="2024-01-01T00:00:00Z", agent_id="a1",
-            session_id="s1", input_text="hi", output_text="bye",
-            metrics={}, metadata={}
+            event_id="e1",
+            timestamp="2024-01-01T00:00:00Z",
+            agent_id="a1",
+            session_id="s1",
+            input_text="hi",
+            output_text="bye",
+            metrics={},
+            metadata={},
         )
         # Should not crash
         await self.ingestor.process_event(event, None)
@@ -83,9 +84,12 @@ class TestIngestorUserContextEdgeCases(unittest.IsolatedAsyncioTestCase):
 
     async def test_security_violation_none_context(self) -> None:
         span = OTELSpan(
-            trace_id="t1", span_id="s1", name="test",
-            start_time_unix_nano=100, end_time_unix_nano=200,
-            attributes={"security_violation": True}
+            trace_id="t1",
+            span_id="s1",
+            name="test",
+            start_time_unix_nano=100,
+            end_time_unix_nano=200,
+            attributes={"security_violation": True},
         )
         with patch("coreason_sentinel.ingestor.logger") as mock_logger:
             await self.ingestor.process_otel_span(span, None)
