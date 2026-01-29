@@ -170,7 +170,6 @@ class TelemetryIngestorAsync:
                 # Assuming batch ingestion might not have user context or it's embedded in event metadata?
                 # For now, we pass None.
                 await self.process_event(event)
-                await self.process_drift(event)
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to process event {event.event_id}: {e}")
@@ -210,7 +209,9 @@ class TelemetryIngestorAsync:
                 )
                 await self.circuit_breaker.record_metric("safety_score", grade.safety_score, user_context)
 
-        await self.circuit_breaker.check_triggers(user_context)
+        # 6. Drift Detection
+        # Note: process_drift records metrics and calls check_triggers internally.
+        await self.process_drift(event, user_context)
 
     async def process_drift(self, event: VeritasEvent, user_context: Optional[UserContext] = None) -> None:
         """
