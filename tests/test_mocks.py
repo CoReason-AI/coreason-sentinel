@@ -1,16 +1,19 @@
 from datetime import datetime
+
 from coreason_sentinel.mocks import (
-    MockNotificationService,
     MockAssayGrader,
-    MockPhoenixClient,
     MockBaselineProvider,
+    MockNotificationService,
+    MockPhoenixClient,
     MockVeritasClient,
 )
+
 
 def test_mock_notification_service() -> None:
     service = MockNotificationService()
     # Should log and not crash
     service.send_critical_alert("test@example.com", "agent_1", "Low Health")
+
 
 def test_mock_assay_grader() -> None:
     grader = MockAssayGrader()
@@ -18,9 +21,11 @@ def test_mock_assay_grader() -> None:
     assert result.faithfulness_score == 0.95
     assert result.safety_score == 1.0
 
+
 def test_mock_phoenix_client() -> None:
     client = MockPhoenixClient()
     client.update_span_attributes("trace_1", "span_1", {"key": "value"})
+
 
 def test_mock_baseline_provider() -> None:
     provider = MockBaselineProvider()
@@ -28,6 +33,7 @@ def test_mock_baseline_provider() -> None:
     assert len(vectors) > 0
     probs, edges = provider.get_baseline_output_length_distribution("agent_1")
     assert len(probs) + 1 == len(edges)
+
 
 def test_mock_veritas_client() -> None:
     client = MockVeritasClient()
