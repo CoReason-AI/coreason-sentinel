@@ -11,11 +11,10 @@
 from typing import Any, List, Optional, Union, cast
 
 import numpy as np
+from coreason_identity.models import UserContext
 from numpy.typing import NDArray
 from scipy.spatial.distance import cosine
 from scipy.special import rel_entr
-
-from coreason_identity.models import UserContext
 
 
 class DriftEngine:
