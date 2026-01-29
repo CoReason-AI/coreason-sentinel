@@ -200,14 +200,6 @@ class DriftEngine:
             # Let's return zeros, relying on KL smoothing.
             return [0.0] * (len(bin_edges) - 1)
 
-        # hist, _ = np.histogram(samples, bins=bin_edges, density=True)
-        # np.histogram with density=True returns the value of the probability density function at the bin,
-        # normalized such that the integral over the range is 1.
-        # However, for discrete PMF comparison (KL), we often want the *probability mass* (sum(p)=1).
-        # If bins are not unit width, density values != probabilities.
-        # KL expects P and Q to sum to 1.
-        # Let's use simple counts and normalize manually to be safe.
-
         counts, _ = np.histogram(samples, bins=bin_edges)
         total = np.sum(counts)
         if total == 0:
