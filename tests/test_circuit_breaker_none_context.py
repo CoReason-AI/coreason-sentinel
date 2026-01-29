@@ -8,6 +8,7 @@ from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerStat
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import SentinelConfig
 
+
 @pytest.mark.asyncio
 class TestCircuitBreakerNoneContext(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
