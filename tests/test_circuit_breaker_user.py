@@ -2,9 +2,9 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from coreason_identity.models import UserContext
 from redis.asyncio import Redis
 
+from coreason_identity.models import UserContext
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import SentinelConfig

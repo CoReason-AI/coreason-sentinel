@@ -10,14 +10,18 @@
 
 import time
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime
+from typing import Generator
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.main import app, get_telemetry_ingestor
+from coreason_sentinel.models import HealthReport
 
+# Initialize TestClient. Note: Lifespan is not triggered automatically here unless using context manager.
 client = TestClient(app)
 
 
@@ -28,19 +32,21 @@ def test_health_check() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_telemetry_ingestor_default() -> None:
-    """Test that the default dependency raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="TelemetryIngestor dependency must be overridden"):
+async def test_get_telemetry_ingestor_default_no_lifespan() -> None:
+    """Test that the dependency raises RuntimeError if not initialized (no lifespan)."""
+    # Ensure no override
+    app.dependency_overrides = {}
+    # Ensure state is clean (it should be since lifespan didn't run)
+    if hasattr(app.state, "ingestor"):
+        del app.state.ingestor
+
+    with pytest.raises(RuntimeError, match="TelemetryIngestor is not initialized in app state"):
         await get_telemetry_ingestor()
 
 
 def test_ingest_otel_span_success() -> None:
     # Mock the ingestor
     mock_ingestor = MagicMock(spec=TelemetryIngestorAsync)
-    # process_otel_span is async, so we need AsyncMock if we were awaiting it,
-    # but background tasks might just call it?
-    # FastAPI background tasks on async functions need to be awaited by Starlette/FastAPI.
-    # MagicMock is not awaitable unless we configure it.
     mock_ingestor.process_otel_span = AsyncMock()
 
     # Override the dependency
@@ -190,3 +196,75 @@ def test_complex_batch_ingestion() -> None:
         assert mock_ingestor.process_otel_span.call_count == batch_size
     finally:
         app.dependency_overrides = {}
+
+
+# --- New Tests for Full Integration with Lifespan ---
+
+
+@pytest.fixture
+def mock_redis() -> Generator[MagicMock, None, None]:
+    with patch("coreason_sentinel.main.Redis") as mock:
+        mock_instance = MagicMock()
+        mock.from_url.return_value = mock_instance
+        mock_instance.close = AsyncMock()
+        yield mock_instance
+
+
+@pytest.fixture
+def client_with_lifespan(mock_redis: MagicMock) -> Generator[TestClient, None, None]:
+    # Using 'with' triggers lifespan
+    with TestClient(app) as c:
+        yield c
+
+
+def test_get_agent_health(client_with_lifespan: TestClient) -> None:
+    # Access the ingestor created in lifespan
+    ingestor = app.state.ingestor
+
+    # Mock return value of circuit breaker
+    # Note: ingestor.circuit_breaker is a real object with a mock redis.
+    # We can just mock the method directly on the object.
+    ingestor.circuit_breaker.get_health_report = AsyncMock(
+        return_value=HealthReport(timestamp=datetime(2025, 1, 1), breaker_state="CLOSED", metrics={"avg_latency": 0.5})
+    )
+
+    response = client_with_lifespan.get("/health/default_agent")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["breaker_state"] == "CLOSED"
+    assert data["metrics"]["avg_latency"] == 0.5
+
+
+def test_get_agent_status(client_with_lifespan: TestClient) -> None:
+    ingestor = app.state.ingestor
+    ingestor.circuit_breaker.allow_request = AsyncMock(return_value=True)
+
+    response = client_with_lifespan.get("/status/default_agent")
+    assert response.status_code == 200
+    assert response.json() is True
+
+    ingestor.circuit_breaker.allow_request.return_value = False
+    response = client_with_lifespan.get("/status/default_agent")
+    assert response.json() is False
+
+
+def test_ingest_veritas(client_with_lifespan: TestClient) -> None:
+    ingestor = app.state.ingestor
+    ingestor.process_event = AsyncMock()
+
+    event_data = {
+        "event_id": "evt_123",
+        "timestamp": "2025-01-01T12:00:00",
+        "agent_id": "default_agent",
+        "session_id": "sess_1",
+        "input_text": "Hello",
+        "output_text": "World",
+        "metrics": {"latency": 0.1},
+        "metadata": {},
+    }
+
+    response = client_with_lifespan.post("/ingest/veritas", json=event_data)
+    assert response.status_code == 202
+    assert response.json() == {"status": "accepted", "event_id": "evt_123"}
+
+    ingestor.process_event.assert_called_once()
