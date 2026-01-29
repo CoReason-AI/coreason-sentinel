@@ -94,3 +94,16 @@ class TestIngestorUserContextEdgeCases(unittest.IsolatedAsyncioTestCase):
         with patch("coreason_sentinel.ingestor.logger") as mock_logger:
             await self.ingestor.process_otel_span(span, None)
             mock_logger.critical.assert_called_with("SECURITY VIOLATION detected for User ID: unknown")
+
+    async def test_security_violation_empty_context(self) -> None:
+        span = OTELSpan(
+            trace_id="t1", span_id="s1", name="test",
+            start_time_unix_nano=100, end_time_unix_nano=200,
+            attributes={"security_violation": True}
+        )
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        with patch("coreason_sentinel.ingestor.logger") as mock_logger:
+            await self.ingestor.process_otel_span(span, mock_ctx) # type: ignore
+            mock_logger.critical.assert_called_with("SECURITY VIOLATION detected for User ID: unknown")

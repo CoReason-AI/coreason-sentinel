@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from redis.asyncio import Redis
@@ -7,7 +7,6 @@ from redis.asyncio import Redis
 from coreason_sentinel.circuit_breaker import CircuitBreaker, CircuitBreakerState
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import SentinelConfig
-
 
 @pytest.mark.asyncio
 class TestCircuitBreakerNoneContext(unittest.IsolatedAsyncioTestCase):
@@ -56,3 +55,26 @@ class TestCircuitBreakerNoneContext(unittest.IsolatedAsyncioTestCase):
     async def test_allow_request_none(self) -> None:
         allowed = await self.breaker.allow_request(None)
         assert allowed is True
+
+    async def test_get_state_empty_context(self) -> None:
+        # Mock empty context
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        await self.breaker.get_state(mock_ctx) # type: ignore
+        self.mock_redis.get.assert_called_with("sentinel:breaker:test-agent:state")
+
+    async def test_record_metric_empty_context(self) -> None:
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        await self.breaker.record_metric("latency", 0.1, mock_ctx) # type: ignore
+        args = self.mock_redis.zadd.call_args[0]
+        assert args[0] == "sentinel:metrics:test-agent:latency"
+
+    async def test_set_state_empty_context(self) -> None:
+        mock_ctx = MagicMock()
+        del mock_ctx.user_id
+        del mock_ctx.sub
+        await self.breaker.set_state(CircuitBreakerState.OPEN, reason="test", user_context=mock_ctx) # type: ignore
+        self.mock_redis.getset.assert_called_with("sentinel:breaker:test-agent:state", "OPEN")
