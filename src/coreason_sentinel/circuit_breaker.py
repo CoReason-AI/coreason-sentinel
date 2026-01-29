@@ -19,9 +19,9 @@ from enum import Enum
 from typing import Optional
 
 import numpy as np
+from coreason_identity.models import UserContext
 from redis.asyncio import Redis
 
-from coreason_identity.models import UserContext
 from coreason_sentinel.interfaces import NotificationServiceProtocol
 from coreason_sentinel.models import CircuitBreakerTrigger, HealthReport, SentinelConfig
 from coreason_sentinel.utils.logger import logger
@@ -164,7 +164,9 @@ class CircuitBreaker:
                 # Send Critical Alert
                 if self.config.owner_email:
                     alert_reason = reason or "Circuit Breaker Tripped (Manual or Unknown)"
-                    user_info = f" (User: {user_context.user_id})" if user_context and user_context.user_id else " (Global)"
+                    user_info = (
+                        f" (User: {user_context.user_id})" if user_context and user_context.user_id else " (Global)"
+                    )
                     try:
                         self.notification_service.send_critical_alert(
                             email=self.config.owner_email,

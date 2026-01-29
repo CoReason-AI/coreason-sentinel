@@ -2,8 +2,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from coreason_identity.models import UserContext
+
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.ingestor import TelemetryIngestorAsync
 from coreason_sentinel.interfaces import OTELSpan, VeritasEvent

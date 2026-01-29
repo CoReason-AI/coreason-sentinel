@@ -17,8 +17,8 @@ from typing import Any, ContextManager, Dict, Optional, Type, cast
 import anyio
 import anyio.from_thread
 import httpx
-
 from coreason_identity.models import UserContext
+
 from coreason_sentinel.circuit_breaker import CircuitBreaker
 from coreason_sentinel.drift_engine import DriftEngine
 from coreason_sentinel.interfaces import BaselineProviderProtocol, OTELSpan, VeritasClientProtocol, VeritasEvent
