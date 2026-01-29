@@ -42,7 +42,13 @@ class TestContext(unittest.IsolatedAsyncioTestCase):
             attributes={},
         )
         # Using both user_id and sub, and permissions and groups to cover potential aliases/versions
-        user_context = UserContext(user_id="user123", sub="user123", email="u@e.com", groups=["admin", "editor"])
+        user_context = UserContext(
+            user_id="user123",
+            sub="user123",
+            email="u@e.com",
+            groups=["admin", "editor"],
+            permissions=["admin", "editor"],
+        )
 
         await self.ingestor.process_otel_span(span, user_context)
 
