@@ -92,12 +92,12 @@ class TelemetryIngestorAsync:
 
         # Map user context to span attributes if available
         if user_context:
-            if user_context.sub:
-                span.attributes["enduser.id"] = user_context.sub
-            if user_context.permissions:
+            if user_context.user_id:
+                span.attributes["enduser.id"] = user_context.user_id
+            if user_context.groups:
                 # Map permissions/groups to role. Taking the first one or joining them.
                 # Requirement: Map user_context.groups to enduser.role
-                span.attributes["enduser.role"] = ",".join(user_context.permissions)
+                span.attributes["enduser.role"] = ",".join(user_context.groups)
 
         # 1. Calculate Latency (seconds)
         if span.end_time_unix_nano > span.start_time_unix_nano:
@@ -144,7 +144,7 @@ class TelemetryIngestorAsync:
         # We assume if specific metrics are present.
         # For now, let's assume 'security_violation' key in custom metrics or attributes.
         if "security_violation" in custom_metrics or attributes.get("security_violation"):
-            user_id = user_context.sub if user_context else "unknown"
+            user_id = user_context.user_id if user_context else "unknown"
             logger.critical(f"SECURITY VIOLATION detected for User ID: {user_id}")
 
         # 5. Check Triggers
@@ -219,7 +219,7 @@ class TelemetryIngestorAsync:
         """
         logger.info(f"Processing drift for event {event.event_id}")
 
-        groups = user_context.permissions if user_context else None
+        groups = user_context.groups if user_context else None
 
         # 1. Drift Detection (Vector)
         embedding = event.metadata.get("embedding")
@@ -298,7 +298,7 @@ class TelemetryIngestorAsync:
 
         await self.circuit_breaker.record_metric("output_length", output_length, user_context)
 
-        groups = user_context.permissions if user_context else None
+        groups = user_context.groups if user_context else None
         try:
             # DB call
             baseline_dist, bin_edges = await anyio.to_thread.run_sync(

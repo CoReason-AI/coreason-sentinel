@@ -41,7 +41,7 @@ class TestContext(unittest.IsolatedAsyncioTestCase):
             end_time_unix_nano=200,
             attributes={},
         )
-        user_context = UserContext(sub="user123", email="u@e.com", permissions=["admin", "editor"])
+        user_context = UserContext(user_id="user123", sub="user123", email="u@e.com", groups=["admin", "editor"])
 
         await self.ingestor.process_otel_span(span, user_context)
 
@@ -67,7 +67,7 @@ class TestContext(unittest.IsolatedAsyncioTestCase):
             end_time_unix_nano=200,
             attributes={"security_violation": True},
         )
-        user_context = UserContext(sub="bad_actor", email="bad@e.com")
+        user_context = UserContext(user_id="bad_actor", sub="bad_actor", email="bad@e.com")
 
         with patch("coreason_sentinel.ingestor.logger") as mock_logger:
             await self.ingestor.process_otel_span(span, user_context)
@@ -85,7 +85,7 @@ class TestContext(unittest.IsolatedAsyncioTestCase):
             metrics={"latency": 0.5},
             metadata={},
         )
-        user_context = UserContext(sub="user456", email="u@e.com")
+        user_context = UserContext(user_id="user456", sub="user456", email="u@e.com")
 
         await self.ingestor.process_event(event, user_context)
 

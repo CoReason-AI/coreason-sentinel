@@ -33,7 +33,7 @@ class TestCircuitBreakerUserContext(unittest.IsolatedAsyncioTestCase):
             recovery_timeout=60,
         )
         self.breaker = CircuitBreaker(self.mock_redis, self.config, self.mock_notification_service)
-        self.user_context = UserContext(sub="user123", email="u@e.com")
+        self.user_context = UserContext(user_id="user123", sub="user123", email="u@e.com")
 
     async def test_get_state_user(self) -> None:
         """Test getting state for specific user."""
